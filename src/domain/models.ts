@@ -54,6 +54,14 @@ export interface IssuedInvoice {
   readonly timestampSeconds: number;
   readonly expirySeconds: number;
   readonly expiresAt: string;
+  readonly payeeNodeId: string;
+  readonly featureBits: readonly number[];
+  readonly verifyUrl?: string;
+  readonly provider: {
+    readonly domain: string;
+    readonly discoveryUrl: string;
+    readonly callbackUrl: string;
+  };
 }
 
 interface InvoiceSlotBase {

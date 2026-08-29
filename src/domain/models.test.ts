@@ -39,6 +39,13 @@ describe("domain model", () => {
         timestampSeconds: 1_700_000_000,
         expirySeconds: 3_600,
         expiresAt: "2023-11-14T23:13:20.000Z",
+        payeeNodeId: `02${"11".repeat(32)}`,
+        featureBits: [17],
+        provider: {
+          domain: "wallet.example",
+          discoveryUrl: "https://wallet.example/.well-known/lnurlp/user",
+          callbackUrl: "https://wallet.example/lnurl/callback",
+        },
       },
       settlementCheck: {
         status: "verified",
