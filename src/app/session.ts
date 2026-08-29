@@ -9,6 +9,7 @@ import {
   sumAmounts,
 } from "../domain/money";
 import type { InputMode, PaymentAnnotation } from "../domain/models";
+import { createLocalSettlementId } from "./localId";
 import type {
   ClientSlot,
   SettlementProgress,
@@ -96,6 +97,7 @@ export function createGeneratingSession(
   preview: SettlementPreview,
   priceSnapshot: PriceSnapshotDto | undefined,
   now = new Date(),
+  idFactory: () => string = createLocalSettlementId,
 ): SettlementSession {
   const slots: ClientSlot[] = preview.targetSats.map((targetSats, index) => ({
     slotNumber: index + 1,
@@ -108,7 +110,7 @@ export function createGeneratingSession(
   }));
   return {
     version: 1,
-    id: crypto.randomUUID(),
+    id: idFactory(),
     inputMode: draft.inputMode,
     totalAmount: draft.totalAmount,
     totalPeople: draft.totalPeople,
