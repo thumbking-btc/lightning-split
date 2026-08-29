@@ -8,7 +8,10 @@ import type {
   PremiumReference,
   PremiumReferenceCache,
 } from "../src/pricing/premium";
-import { parsePremiumReference } from "../src/pricing/premium";
+import {
+  parsePremiumReference,
+  PREMIUM_REFERENCE_CACHE_TTL_MS,
+} from "../src/pricing/premium";
 
 const INTERNAL_CACHE_ORIGIN = "https://cache.lightning-split.invalid";
 const PRICE_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/current`;
@@ -56,7 +59,9 @@ export class WorkerPremiumReferenceCache implements PremiumReferenceCache {
     await this.cache.put(
       PREMIUM_CACHE_KEY,
       Response.json(reference, {
-        headers: { "Cache-Control": "public, max-age=10" },
+        headers: {
+          "Cache-Control": `public, max-age=${PREMIUM_REFERENCE_CACHE_TTL_MS / 1_000}`,
+        },
       }),
     );
   }

@@ -29,5 +29,5 @@ export function QrCode({ invoice }: { readonly invoice: string }) {
   if (error) return <p className="inline-error">{error}</p>;
   if (!dataUrl)
     return <div className="qr-placeholder" aria-label="QR 생성 중" />;
-  return <img className="qr-image" src={dataUrl} alt="Lightning invoice QR" />;
+  return <img className="qr-image" src={dataUrl} alt="라이트닝 결제용 QR" />;
 }

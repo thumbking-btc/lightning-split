@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { PriceResponseDto } from "./api/contracts";
 import type { PriceSnapshotDto } from "./api/serialization";
-import { fetchPriceInformation, requestInvoiceBatch } from "./app/api";
+import { requestInvoiceBatch } from "./app/api";
 import { copyTextToClipboard, readTextFromClipboard } from "./app/clipboard";
+import {
+  isLightningInvoiceInput,
+  LIGHTNING_INVOICE_INPUT_MESSAGE,
+} from "./app/lightningInput";
 import { parseParticipantNameCandidates } from "./app/nameCandidates";
 import {
   clearActiveSession,
@@ -25,6 +28,10 @@ import {
   type DraftInput,
 } from "./app/session";
 import type { ClientSlot, SettlementSession } from "./app/types";
+import {
+  useMarketInformation,
+  type MarketInformationState,
+} from "./app/useMarketInformation";
 import { toUserMessage } from "./app/userMessage";
 import { useSettlementPolling } from "./app/useSettlementPolling";
 import type { InputMode } from "./domain/models";
@@ -253,8 +260,8 @@ export function InvoiceCard({
             </div>
           )}
           <p>
-            이 이름은 사용자가 붙인 표시정보이며 Lightning이 인증한 송금자
-            신원이 아닙니다.
+            이 이름은 사용자가 붙인 표시정보이며 라이트닝 네트워크가 인증한
+            송금자 신원이 아닙니다.
           </p>
         </div>
       )}
@@ -262,29 +269,58 @@ export function InvoiceCard({
   );
 }
 
-function MarketSummary({
-  information,
+export function MarketSummary({
+  market,
 }: {
-  readonly information: PriceResponseDto | undefined;
+  readonly market: MarketInformationState;
 }) {
-  if (!information) return <div className="market-summary">가격 확인 중…</div>;
+  const information = market.information;
+  const status =
+    market.connection === "live"
+      ? "실시간"
+      : market.connection === "recent"
+        ? "최근 시세 · 실시간 연결 중"
+        : market.connection === "stale"
+          ? "시세 지연"
+          : market.connection === "unavailable"
+            ? "시세 확인 필요"
+            : "시세 연결 중";
   return (
-    <div className="market-summary" aria-live="polite">
-      <span>
-        BTC{" "}
-        <strong>
-          {formatInteger(BigInt(information.snapshot.priceKrw))}원
-        </strong>
-      </span>
-      <span>
-        김치프리미엄{" "}
-        <strong>
-          {information.premium
-            ? formatPremium(information.premium.basisPoints)
-            : "정보 없음"}
-        </strong>
-      </span>
-    </div>
+    <section className="market-summary" aria-label="현재 비트코인 시장정보">
+      <div className="market-summary-head">
+        <span>현재 시장</span>
+        <span
+          className={`market-status ${market.connection}`}
+          role="status"
+          aria-live="polite"
+        >
+          {status}
+        </span>
+      </div>
+      <div className="market-values">
+        <div>
+          <span>BTC/KRW</span>
+          <strong>
+            {information
+              ? `${formatInteger(BigInt(information.snapshot.priceKrw))}원`
+              : "확인 중…"}
+          </strong>
+        </div>
+        <div>
+          <span>김치프리미엄</span>
+          <strong>
+            {information?.premium
+              ? formatPremium(information.premium.basisPoints)
+              : "정보 없음"}
+          </strong>
+        </div>
+      </div>
+      <small>
+        {information
+          ? `최근 가격 ${formatPriceTime(information.snapshot)}`
+          : market.error || "시세를 확인하고 있습니다."}
+      </small>
+    </section>
   );
 }
 
@@ -374,8 +410,7 @@ export function App() {
   const [lightningAddress, setLightningAddress] = useState("");
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
-  const [priceInformation, setPriceInformation] = useState<PriceResponseDto>();
-  const [priceError, setPriceError] = useState<string>();
+  const { market, refreshLockedSnapshot } = useMarketInformation();
   const [session, setSession] = useState<SettlementSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [retryingSlot, setRetryingSlot] = useState<number>();
@@ -385,7 +420,9 @@ export function App() {
   const [restoring, setRestoring] = useState(true);
   const [activeSlotIndex, setActiveSlotIndex] = useState(0);
   const carouselRef = useRef<HTMLElement>(null);
+  const priceInformation = market.information;
   const priceSnapshot = priceInformation?.snapshot;
+  const lightningInvoiceInput = isLightningInvoiceInput(lightningAddress);
 
   const updateSession = useCallback(
     (updater: (current: SettlementSession) => SettlementSession) => {
@@ -396,24 +433,10 @@ export function App() {
   useSettlementPolling(session, updateSession);
 
   const refreshPrice = useCallback(async () => {
-    setPriceError(undefined);
-    try {
-      const information = await fetchPriceInformation();
-      setPriceInformation(information);
-      return information.snapshot;
-    } catch (cause) {
-      const message = toUserMessage(cause, "가격을 조회하지 못했습니다.");
-      setPriceError(message);
-      throw cause;
-    }
-  }, []);
+    return (await refreshLockedSnapshot()).snapshot;
+  }, [refreshLockedSnapshot]);
 
   useEffect(() => {
-    void fetchPriceInformation()
-      .then(setPriceInformation)
-      .catch((cause: unknown) =>
-        setPriceError(toUserMessage(cause, "가격을 조회하지 못했습니다.")),
-      );
     void loadActiveSession()
       .then((stored) => {
         if (stored) {
@@ -478,6 +501,10 @@ export function App() {
   const startSettlement = async () => {
     if (!lightningAddress.trim()) {
       setError("Lightning Address를 입력하십시오.");
+      return;
+    }
+    if (lightningInvoiceInput) {
+      setError(LIGHTNING_INVOICE_INPUT_MESSAGE);
       return;
     }
     setBusy(true);
@@ -672,7 +699,11 @@ export function App() {
       return;
     }
     setLightningAddress(pasted);
-    setNotice("Lightning Address를 붙여넣었습니다.");
+    setNotice(
+      isLightningInvoiceInput(pasted)
+        ? LIGHTNING_INVOICE_INPUT_MESSAGE
+        : "Lightning Address를 붙여넣었습니다.",
+    );
   };
 
   const moveCarousel = (nextIndex: number) => {
@@ -722,7 +753,7 @@ export function App() {
         : (progress.completedCount / progress.totalCount) * 100;
     return (
       <main className="app-shell">
-        <MarketSummary information={priceInformation} />
+        <MarketSummary market={market} />
         <SettlementHeader
           note={session.overallNote}
           onNewSettlement={() => void newSettlement()}
@@ -833,7 +864,7 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <MarketSummary information={priceInformation} />
+      <MarketSummary market={market} />
       <header className="hero">
         <div className="brand-mark large">ϟ</div>
         <span className="eyebrow">LIGHTNING SPLIT</span>
@@ -901,15 +932,24 @@ export function App() {
               autoCapitalize="none"
               autoCorrect="off"
               value={lightningAddress}
-              onChange={(event) => setLightningAddress(event.target.value)}
+              aria-invalid={lightningInvoiceInput}
+              aria-describedby="lightning-address-feedback"
+              onChange={(event) => {
+                setLightningAddress(event.target.value);
+                setNotice(undefined);
+              }}
               placeholder="name@example.com"
             />
             <button type="button" onClick={() => void pasteLightningAddress()}>
               붙여넣기
             </button>
           </span>
-          <small className="field-feedback" aria-live="polite">
-            {notice}
+          <small
+            id="lightning-address-feedback"
+            className={`field-feedback ${lightningInvoiceInput ? "input-error" : ""}`}
+            aria-live="polite"
+          >
+            {lightningInvoiceInput ? LIGHTNING_INVOICE_INPUT_MESSAGE : notice}
           </small>
         </label>
         <details className="optional-fields">
@@ -964,7 +1004,7 @@ export function App() {
             {formatPriceTime(priceSnapshot)}
           </p>
         )}
-        {priceError && <p className="inline-error">{priceError}</p>}
+        {market.error && <p className="inline-error">{market.error}</p>}
         {preview.value ? (
           <>
             <div className="preview-grid">
@@ -1037,7 +1077,7 @@ export function App() {
       <button
         className="primary-button"
         type="button"
-        disabled={busy || !preview.value}
+        disabled={busy || !preview.value || lightningInvoiceInput}
         onClick={() => void startSettlement()}
       >
         {busy ? "결제 요청 만드는 중…" : "정산 시작"}

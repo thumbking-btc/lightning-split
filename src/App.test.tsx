@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { AmountInput, InvoiceCard, SettlementHeader } from "./App";
+import {
+  AmountInput,
+  InvoiceCard,
+  MarketSummary,
+  SettlementHeader,
+} from "./App";
+import { serializeBigIntDecimal } from "./api/serialization";
 import type { ClientSlot } from "./app/types";
 
 describe("v1 mobile accessibility states", () => {
@@ -25,6 +31,38 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("8/30 고깃집 저녁");
     expect(html).toContain("정산 메모");
+  });
+
+  it("gives live market price and premium a clear non-technical status", () => {
+    const html = renderToStaticMarkup(
+      <MarketSummary
+        market={{
+          connection: "live",
+          information: {
+            ok: true,
+            snapshot: {
+              priceKrw: serializeBigIntDecimal(162_345_000n),
+              source: "upbit",
+              market: "KRW-BTC",
+              observedAt: new Date().toISOString(),
+              retrievedAt: new Date().toISOString(),
+              snapshotAt: new Date().toISOString(),
+              fallbackUsed: false,
+            },
+            premium: {
+              basisPoints: "182",
+              referencePriceKrw: "159444000",
+              retrievedAt: new Date().toISOString(),
+            },
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("162,345,000원");
+    expect(html).toContain("+1.82%");
+    expect(html).toContain("실시간");
+    expect(html).not.toContain("upbit");
+    expect(html).not.toContain("fallback");
   });
 
   it("labels manual confirmation and post-payment sender annotation clearly", () => {
@@ -57,6 +95,6 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("사용자 확인");
     expect(html).toContain("누가 보냈나요?");
-    expect(html).toContain("Lightning이 인증한 송금자");
+    expect(html).toContain("라이트닝 네트워크가 인증한 송금자");
   });
 });

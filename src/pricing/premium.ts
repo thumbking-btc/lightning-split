@@ -8,6 +8,7 @@ import {
 } from "../infrastructure/validation";
 
 const DECIMAL_SCALE = 100_000_000n;
+export const PREMIUM_REFERENCE_CACHE_TTL_MS = 60_000;
 
 export interface PremiumReference {
   readonly internationalPriceKrw: string;
@@ -176,7 +177,8 @@ export class KimchiPremiumService {
     let reference = await this.cache.get();
     if (
       !reference ||
-      nowMs - Date.parse(reference.retrievedAt) > this.policy.cacheTtlMs ||
+      nowMs - Date.parse(reference.retrievedAt) >
+        PREMIUM_REFERENCE_CACHE_TTL_MS ||
       nowMs - Date.parse(reference.observedAt) > this.policy.maxObservationAgeMs
     ) {
       reference = await this.adapter.fetchReference();

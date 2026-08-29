@@ -45,21 +45,73 @@ button {
     max(2rem, env(safe-area-inset-bottom));
 }
 .market-summary {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 0.7rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  color: var(--muted);
+  background: var(--card);
+  box-shadow: 0 8px 24px rgb(49 42 28 / 6%);
+}
+.market-summary-head {
   display: flex;
-  min-height: 2.75rem;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-bottom: 0.55rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 0.85rem;
-  color: var(--muted);
-  background: rgb(255 253 248 / 75%);
   font-size: 0.72rem;
+  font-weight: 700;
 }
-.market-summary strong {
+.market-status {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  padding: 0.25rem 0.55rem;
+  border-radius: 99px;
+  color: #765a17;
+  background: #fff0c6;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.market-status.live {
+  color: #0f6749;
+  background: #dff4ea;
+}
+.market-status.stale,
+.market-status.unavailable {
+  color: #8f302b;
+  background: #fde5e3;
+}
+.market-values {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 0.55rem;
+}
+.market-values > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+  padding: 0.65rem 0.7rem;
+  border-radius: 0.75rem;
+  background: #f3eee3;
+}
+.market-values span {
+  font-size: 0.65rem;
+}
+.market-values strong {
+  overflow: hidden;
   color: var(--ink);
+  font-size: clamp(0.95rem, 4.5vw, 1.25rem);
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.market-values > div:last-child strong {
+  color: #8a5e0c;
+}
+.market-summary > small {
+  font-size: 0.66rem;
 }
 .loading-screen {
   display: grid;
@@ -280,6 +332,12 @@ button {
 }
 .field-feedback {
   min-height: 1em;
+}
+.field-feedback.input-error {
+  color: var(--red);
+}
+.input-with-action input[aria-invalid="true"] {
+  border-color: var(--red);
 }
 .stacked-field input:focus,
 .stacked-field textarea:focus,
