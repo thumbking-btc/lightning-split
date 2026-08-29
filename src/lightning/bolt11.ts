@@ -156,7 +156,7 @@ function validateDescription(fields: ReadonlyMap<string, number[][]>): void {
     if (bytes.length > 639)
       return fail("DESCRIPTION", "Description is too long.");
     try {
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
     } catch {
       return fail("DESCRIPTION", "Description is not valid UTF-8.");
     }

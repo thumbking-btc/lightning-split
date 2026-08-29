@@ -85,7 +85,10 @@ async function readBoundedJson(
   }
 
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: false,
+    }).decode(bytes);
     return JSON.parse(text) as unknown;
   } catch (cause) {
     if (cause instanceof InfrastructureError) throw cause;

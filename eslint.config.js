@@ -6,7 +6,14 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["coverage", "dist", "node_modules", "prototype.html"],
+    ignores: [
+      ".wrangler",
+      "coverage",
+      "dist",
+      "node_modules",
+      "prototype.html",
+      "worker-configuration.d.ts",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
