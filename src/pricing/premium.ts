@@ -4,6 +4,7 @@ import { InfrastructureError } from "../infrastructure/errors";
 import { fetchBoundedJson, type Fetcher } from "../infrastructure/http";
 import {
   isRecord,
+  parseProviderInteger,
   parsePositiveSafeInteger,
 } from "../infrastructure/validation";
 
@@ -25,6 +26,15 @@ export interface KimchiPremiumInformation {
 export interface PremiumReferenceCache {
   get(): Promise<PremiumReference | null>;
   put(reference: PremiumReference): Promise<void>;
+}
+
+export interface PremiumReferenceAdapter {
+  fetchReference(): Promise<PremiumReference>;
+}
+
+interface BtcUsdtTicker {
+  readonly price: bigint;
+  readonly observedAtMs: number;
 }
 
 export class NoopPremiumReferenceCache implements PremiumReferenceCache {
@@ -58,6 +68,74 @@ function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
   return (numerator * 2n + denominator) / (denominator * 2n);
 }
 
+function parseTimestampMs(value: unknown, field: string): number {
+  const parsed = parseProviderInteger(value, field);
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      `${field} must be a safe integer.`,
+    );
+  }
+  return Number(parsed);
+}
+
+function assertFresh(
+  observedAtMs: number,
+  retrievedAtMs: number,
+  policy: PricePolicy,
+  field: string,
+): void {
+  if (
+    observedAtMs > retrievedAtMs + policy.maxFutureClockSkewMs ||
+    retrievedAtMs - observedAtMs > policy.maxObservationAgeMs
+  ) {
+    throw new InfrastructureError("STALE_DATA", `${field} is stale.`, {
+      retryable: true,
+    });
+  }
+}
+
+function parseOkxTicker(value: unknown): BtcUsdtTicker {
+  if (!isRecord(value) || value.code !== "0" || !Array.isArray(value.data)) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "OKX BTC-USDT ticker is invalid.",
+    );
+  }
+  const ticker = value.data[0];
+  if (
+    value.data.length !== 1 ||
+    !isRecord(ticker) ||
+    ticker.instType !== "SPOT" ||
+    ticker.instId !== "BTC-USDT"
+  ) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "OKX BTC-USDT ticker is invalid.",
+    );
+  }
+  return Object.freeze({
+    price: parseScaledDecimal(ticker.last, "OKX BTC-USDT price"),
+    observedAtMs: parseTimestampMs(ticker.ts, "OKX BTC-USDT timestamp"),
+  });
+}
+
+function parseKuCoinTicker(value: unknown): BtcUsdtTicker {
+  if (!isRecord(value) || value.code !== "200000" || !isRecord(value.data)) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "KuCoin BTC-USDT ticker is invalid.",
+    );
+  }
+  return Object.freeze({
+    price: parseScaledDecimal(value.data.price, "KuCoin BTC-USDT price"),
+    observedAtMs: parseTimestampMs(
+      value.data.time,
+      "KuCoin BTC-USDT timestamp",
+    ),
+  });
+}
+
 export function parsePremiumReference(value: unknown): PremiumReference {
   if (
     !isRecord(value) ||
@@ -80,27 +158,70 @@ export function parsePremiumReference(value: unknown): PremiumReference {
   });
 }
 
-export class BinanceUpbitPremiumAdapter {
+export class UpbitInternationalPremiumAdapter implements PremiumReferenceAdapter {
   constructor(
     private readonly fetcher: Fetcher = fetch,
     private readonly policy: PricePolicy = DEFAULT_PRICE_POLICY,
     private readonly clock: () => number = Date.now,
   ) {}
 
+  private async fetchInternationalTicker(): Promise<BtcUsdtTicker> {
+    let primaryError: unknown;
+    try {
+      const response = await fetchBoundedJson(
+        "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT",
+        this.policy.http,
+        this.fetcher,
+        this.clock,
+      );
+      const ticker = parseOkxTicker(response.value);
+      assertFresh(
+        ticker.observedAtMs,
+        this.clock(),
+        this.policy,
+        "OKX BTC-USDT ticker",
+      );
+      return ticker;
+    } catch (error) {
+      primaryError = error;
+    }
+
+    try {
+      const response = await fetchBoundedJson(
+        "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT",
+        this.policy.http,
+        this.fetcher,
+        this.clock,
+      );
+      const ticker = parseKuCoinTicker(response.value);
+      assertFresh(
+        ticker.observedAtMs,
+        this.clock(),
+        this.policy,
+        "KuCoin BTC-USDT ticker",
+      );
+      return ticker;
+    } catch (fallbackError) {
+      throw new InfrastructureError(
+        "NETWORK_ERROR",
+        "International BTC-USDT ticker sources are unavailable.",
+        {
+          retryable: true,
+          cause: new AggregateError([primaryError, fallbackError]),
+        },
+      );
+    }
+  }
+
   async fetchReference(): Promise<PremiumReference> {
-    const [upbit, binance] = await Promise.all([
+    const [upbit, internationalTicker] = await Promise.all([
       fetchBoundedJson(
         "https://api.upbit.com/v1/ticker?markets=KRW-USDT",
         this.policy.http,
         this.fetcher,
         this.clock,
       ),
-      fetchBoundedJson(
-        "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
-        this.policy.http,
-        this.fetcher,
-        this.clock,
-      ),
+      this.fetchInternationalTicker(),
     ]);
     if (
       !Array.isArray(upbit.value) ||
@@ -119,44 +240,30 @@ export class BinanceUpbitPremiumAdapter {
         "Upbit USDT market is invalid.",
       );
     }
-    if (!isRecord(binance.value) || binance.value.symbol !== "BTCUSDT") {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "Binance BTC ticker is invalid.",
-      );
-    }
-    const observedAtMs = parsePositiveSafeInteger(
+    const upbitObservedAtMs = parsePositiveSafeInteger(
       upbitTicker.trade_timestamp,
       "Upbit USDT trade_timestamp",
     );
     const retrievedAtMs = this.clock();
-    if (
-      observedAtMs > retrievedAtMs + this.policy.maxFutureClockSkewMs ||
-      retrievedAtMs - observedAtMs > this.policy.maxObservationAgeMs
-    ) {
-      throw new InfrastructureError(
-        "STALE_DATA",
-        "Upbit USDT ticker is stale.",
-        {
-          retryable: true,
-        },
-      );
-    }
+    assertFresh(
+      upbitObservedAtMs,
+      retrievedAtMs,
+      this.policy,
+      "Upbit USDT ticker",
+    );
     const usdtKrw = parseScaledDecimal(
       upbitTicker.trade_price,
       "Upbit KRW-USDT price",
     );
-    const btcUsdt = parseScaledDecimal(
-      binance.value.price,
-      "Binance BTCUSDT price",
-    );
     const referencePriceKrw = roundHalfUp(
-      usdtKrw * btcUsdt,
+      usdtKrw * internationalTicker.price,
       DECIMAL_SCALE * DECIMAL_SCALE,
     );
     return Object.freeze({
       internationalPriceKrw: referencePriceKrw.toString(),
-      observedAt: new Date(observedAtMs).toISOString(),
+      observedAt: new Date(
+        Math.min(upbitObservedAtMs, internationalTicker.observedAtMs),
+      ).toISOString(),
       retrievedAt: new Date(retrievedAtMs).toISOString(),
     });
   }
@@ -164,7 +271,7 @@ export class BinanceUpbitPremiumAdapter {
 
 export class KimchiPremiumService {
   constructor(
-    private readonly adapter: BinanceUpbitPremiumAdapter,
+    private readonly adapter: PremiumReferenceAdapter,
     private readonly cache: PremiumReferenceCache = new NoopPremiumReferenceCache(),
     private readonly policy: PricePolicy = DEFAULT_PRICE_POLICY,
     private readonly clock: () => number = Date.now,

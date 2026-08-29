@@ -19,8 +19,8 @@ import { generateInvoiceBatch } from "../src/lightning/batch";
 import { LnurlPayClient } from "../src/lightning/lnurl";
 import { checkSettlement } from "../src/lightning/settlement";
 import {
-  BinanceUpbitPremiumAdapter,
   KimchiPremiumService,
+  UpbitInternationalPremiumAdapter,
 } from "../src/pricing/premium";
 import {
   BithumbPriceAdapter,
@@ -134,7 +134,7 @@ async function handlePrice(): Promise<Response> {
   );
   const snapshot = await service.getSnapshot();
   const premium = await new KimchiPremiumService(
-    new BinanceUpbitPremiumAdapter(),
+    new UpbitInternationalPremiumAdapter(),
     new WorkerPremiumReferenceCache(),
   )
     .getInformation(snapshot.priceKrw)

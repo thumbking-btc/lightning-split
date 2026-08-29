@@ -60,9 +60,14 @@ async function callWorker(
 
 describe("Lightning Split Worker API", () => {
   beforeEach(async () => {
-    await caches.default.delete(
-      "https://cache.lightning-split.invalid/price/current",
-    );
+    await Promise.all([
+      caches.default.delete(
+        "https://cache.lightning-split.invalid/price/current",
+      ),
+      caches.default.delete(
+        "https://cache.lightning-split.invalid/price/premium-reference",
+      ),
+    ]);
   });
 
   afterEach(() => vi.useRealTimers());
@@ -85,8 +90,18 @@ describe("Lightning Split Worker API", () => {
               },
         ]),
       ),
-      http.get("https://api.binance.com/api/v3/ticker/price", () =>
-        HttpResponse.json({ symbol: "BTCUSDT", price: "80000" }),
+      http.get("https://www.okx.com/api/v5/market/ticker", () =>
+        HttpResponse.json({
+          code: "0",
+          data: [
+            {
+              instType: "SPOT",
+              instId: "BTC-USDT",
+              last: "80000",
+              ts: String(timestamp),
+            },
+          ],
+        }),
       ),
     );
     const primary = await callWorker(apiRequest("/api/price"));
@@ -140,6 +155,47 @@ describe("Lightning Split Worker API", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: false,
       error: { code: "NETWORK_ERROR", retryable: true },
+    });
+  });
+
+  it("returns premium information through the KuCoin fallback when OKX fails", async () => {
+    const timestamp = Date.now();
+    network.use(
+      http.get("https://api.upbit.com/v1/ticker", ({ request }) =>
+        HttpResponse.json([
+          new URL(request.url).searchParams.get("markets") === "KRW-USDT"
+            ? {
+                market: "KRW-USDT",
+                trade_price: 1_400,
+                trade_timestamp: timestamp,
+              }
+            : {
+                market: "KRW-BTC",
+                trade_price: 120_000_000,
+                trade_timestamp: timestamp,
+              },
+        ]),
+      ),
+      http.get("https://www.okx.com/api/v5/market/ticker", () =>
+        HttpResponse.json({}, { status: 503 }),
+      ),
+      http.get("https://api.kucoin.com/api/v1/market/orderbook/level1", () =>
+        HttpResponse.json({
+          code: "200000",
+          data: {
+            time: timestamp,
+            price: "80000",
+          },
+        }),
+      ),
+    );
+
+    const { response } = await callWorker(apiRequest("/api/price"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      premium: { basisPoints: "714", referencePriceKrw: "112000000" },
     });
   });
 
