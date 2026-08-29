@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>라이트닝으로 받기 · 엔빵</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{
+    --green:#4a5a35;
+    --green-d:#3a4729;
+    --green-l:#eef1e6;
+    --yellow:#f2c500;
+    --bg:#ffffff;
+    --card:#ffffff;
+    --ink:#1c1c1a;
+    --muted:#9a9a90;
+    --line:#ecece5;
+    --radius:22px;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;background:var(--bg);}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Segoe UI",sans-serif;
+    color:var(--ink);
+    max-width:430px;margin:0 auto;min-height:100vh;
+    display:flex;flex-direction:column;
+    overscroll-behavior:none;
+  }
+  /* 헤더 */
+  .topbar{
+    display:flex;align-items:center;justify-content:center;position:relative;
+    padding:18px 20px 6px;
+  }
+  .topbar h1{font-size:1.18rem;font-weight:700;margin:0;letter-spacing:-.01em;}
+  .topbar .x{position:absolute;right:18px;top:16px;font-size:1.6rem;color:var(--ink);
+    background:none;border:none;line-height:1;cursor:pointer;}
+
+  /* 탭 */
+  .tabs{display:flex;gap:6px;margin:14px 20px 4px;padding:5px;background:var(--green-l);
+    border-radius:16px;}
+  .tab{flex:1;border:none;background:none;padding:11px 0;border-radius:12px;
+    font-size:.98rem;font-weight:700;color:var(--green);cursor:pointer;letter-spacing:-.01em;
+    transition:all .18s ease;}
+  .tab.active{background:var(--green);color:#fff;box-shadow:0 3px 10px rgba(74,90,53,.28);}
+
+  .pane{display:none;padding:8px 20px 28px;flex:1;}
+  .pane.active{display:block;animation:fade .25s ease;}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* 입력 */
+  .field{margin-top:18px;}
+  .field label{display:block;font-size:.84rem;font-weight:700;color:var(--muted);
+    margin:0 4px 8px;letter-spacing:.01em;}
+  .amt-wrap{position:relative;display:flex;align-items:baseline;
+    background:#fafaf7;border:1.5px solid var(--line);border-radius:16px;
+    padding:16px 18px;transition:border-color .15s;}
+  .amt-wrap:focus-within{border-color:var(--green);}
+  .amt-wrap input{border:none;background:none;outline:none;flex:1;width:100%;
+    font-size:1.9rem;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em;min-width:0;}
+  .amt-wrap input::placeholder{color:#cfcfc6;}
+  .amt-wrap .unit{font-size:1rem;font-weight:700;color:var(--muted);padding-left:8px;white-space:nowrap;}
+  .row2{display:flex;gap:12px;}
+  .row2 .field{flex:1;}
+
+  .chips{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  .chip{border:1.5px solid var(--line);background:#fff;border-radius:11px;
+    padding:8px 13px;font-size:.85rem;font-weight:700;color:var(--green);cursor:pointer;
+    font-variant-numeric:tabular-nums;}
+  .chip:active{background:var(--green-l);}
+
+  .cta{width:100%;margin-top:22px;padding:17px;border:none;border-radius:16px;
+    background:var(--green);color:#fff;font-size:1.05rem;font-weight:800;cursor:pointer;
+    letter-spacing:-.01em;box-shadow:0 6px 16px rgba(74,90,53,.3);transition:transform .08s;}
+  .cta:active{transform:scale(.985);}
+  .cta:disabled{background:#cdd2c2;box-shadow:none;cursor:not-allowed;}
+
+  /* 분배 미리보기 */
+  .preview{margin-top:16px;background:var(--green-l);border-radius:16px;padding:15px 17px;
+    display:none;}
+  .preview.show{display:block;}
+  .preview .pv-row{display:flex;justify-content:space-between;align-items:center;
+    font-size:.95rem;padding:3px 0;}
+  .preview .pv-row b{font-variant-numeric:tabular-nums;font-weight:800;color:var(--green-d);}
+  .preview .pv-note{font-size:.78rem;color:var(--green);margin-top:6px;opacity:.85;}
+
+  /* QR 카드 (단건) */
+  .single-result{display:none;margin-top:8px;}
+  .single-result.show{display:block;animation:fade .25s ease;}
+
+  .qr-amount{text-align:center;margin:14px 0 6px;}
+  .qr-amount .big{font-size:2.1rem;font-weight:900;letter-spacing:-.03em;
+    font-variant-numeric:tabular-nums;}
+  .qr-amount .big small{font-size:.95rem;font-weight:800;color:var(--muted);margin-left:6px;
+    letter-spacing:0;}
+  .qr-amount .krw{font-size:.85rem;color:var(--muted);font-weight:600;margin-top:2px;}
+
+  .qr-box{position:relative;width:230px;height:230px;margin:14px auto 4px;
+    background:#fff;border-radius:18px;border:1.5px solid var(--line);
+    display:flex;align-items:center;justify-content:center;padding:14px;}
+  .qr-box img,.qr-box canvas{width:100%!important;height:100%!important;border-radius:6px;}
+  .qr-logo{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    width:46px;height:46px;background:#fff;border-radius:11px;
+    display:flex;align-items:center;justify-content:center;font-size:1.7rem;
+    box-shadow:0 0 0 5px #fff;}
+  .invoice-str{font-size:.62rem;color:var(--muted);word-break:break-all;text-align:center;
+    margin:8px auto 0;max-width:280px;line-height:1.45;font-family:ui-monospace,monospace;}
+
+  .copy-btn{display:flex;align-items:center;justify-content:center;gap:9px;
+    margin:16px auto 0;padding:14px 30px;background:var(--green);color:#fff;border:none;
+    border-radius:15px;font-size:1rem;font-weight:800;cursor:pointer;
+    box-shadow:0 5px 14px rgba(74,90,53,.28);transition:transform .08s,background .2s;}
+  .copy-btn:active{transform:scale(.96);}
+  .copy-btn.done{background:#5e8c3e;}
+  .copy-btn svg{width:18px;height:18px;}
+
+  /* 엔빵 캐러셀 */
+  .carousel-wrap{display:none;margin-top:14px;}
+  .carousel-wrap.show{display:block;animation:fade .25s ease;}
+  .car-head{display:flex;align-items:center;justify-content:space-between;margin:0 2px 10px;}
+  .car-head .title{font-size:1.05rem;font-weight:800;letter-spacing:-.01em;}
+  .car-head .reset{background:none;border:none;color:var(--muted);font-size:.85rem;
+    font-weight:700;cursor:pointer;text-decoration:underline;}
+
+  .carousel{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:4px 0 2px;margin:0 -20px;
+    padding-left:20px;padding-right:20px;}
+  .carousel::-webkit-scrollbar{display:none;}
+  .slide{scroll-snap-align:center;flex:0 0 calc(100% - 30px);
+    background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);
+    padding:18px 16px 20px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.04);}
+  .slide .badge{display:inline-flex;align-items:center;gap:7px;background:var(--green-l);
+    color:var(--green-d);font-weight:800;font-size:.9rem;padding:7px 15px;border-radius:999px;}
+  .slide .badge .num{background:var(--green);color:#fff;border-radius:999px;
+    min-width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
+    font-size:.8rem;}
+  .slide .pamt{font-size:1.85rem;font-weight:900;letter-spacing:-.03em;margin:12px 0 0;
+    font-variant-numeric:tabular-nums;}
+  .slide .pamt small{font-size:.85rem;font-weight:800;color:var(--muted);margin-left:5px;}
+  .slide .paid-tag{display:inline-block;margin-top:6px;font-size:.78rem;font-weight:800;
+    color:#5e8c3e;background:#eaf4e0;padding:3px 10px;border-radius:999px;visibility:hidden;}
+  .slide.paid .paid-tag{visibility:visible;}
+  .slide.paid .qr-box{opacity:.35;}
+
+  .nav{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:14px;}
+  .nav button{width:42px;height:42px;border-radius:50%;border:1.5px solid var(--line);
+    background:#fff;color:var(--green);font-size:1.2rem;cursor:pointer;display:flex;
+    align-items:center;justify-content:center;font-weight:800;}
+  .nav button:active{background:var(--green-l);}
+  .nav button:disabled{opacity:.3;cursor:default;}
+  .dots{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;max-width:170px;}
+  .dot{width:7px;height:7px;border-radius:50%;background:#d8d8cf;transition:all .2s;}
+  .dot.active{background:var(--green);width:20px;border-radius:4px;}
+
+  .car-actions{display:flex;gap:10px;margin-top:16px;}
+  .car-actions button{flex:1;padding:14px;border-radius:15px;font-size:.95rem;font-weight:800;
+    cursor:pointer;border:none;transition:transform .08s;}
+  .car-actions button:active{transform:scale(.97);}
+  .btn-copy-one{background:var(--green);color:#fff;}
+  .btn-mark{background:var(--yellow);color:#3a3000;}
+
+  .summary-bar{margin-top:14px;background:var(--green);color:#fff;border-radius:16px;
+    padding:13px 18px;display:flex;justify-content:space-between;align-items:center;
+    font-size:.92rem;font-weight:700;}
+  .summary-bar b{font-variant-numeric:tabular-nums;}
+
+  /* 토스트 */
+  .toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(20px);
+    background:var(--green-d);color:#fff;padding:13px 22px;border-radius:14px;font-weight:700;
+    font-size:.92rem;opacity:0;pointer-events:none;transition:all .25s;z-index:50;
+    box-shadow:0 8px 24px rgba(0,0,0,.25);}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+  .hint{font-size:.78rem;color:var(--muted);text-align:center;margin-top:18px;line-height:1.6;
+    padding:0 6px;}
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <h1>라이트닝으로 받기</h1>
+    <button class="x">✕</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="single">한 명에게</button>
+    <button class="tab" data-tab="split">엔빵 🌽</button>
+  </div>
+
+  <!-- ===== 단건 받기 ===== -->
+  <div class="pane active" id="pane-single">
+    <div class="field">
+      <label>받을 금액</label>
+      <div class="amt-wrap">
+        <input id="s-amt" type="text" inputmode="numeric" placeholder="0">
+        <span class="unit">사토시</span>
+      </div>
+      <div class="chips" id="s-chips">
+        <span class="chip" data-v="1000">1,000</span>
+        <span class="chip" data-v="5000">5,000</span>
+        <span class="chip" data-v="10000">10,000</span>
+        <span class="chip" data-v="50000">50,000</span>
+      </div>
+    </div>
+
+    <button class="cta" id="s-gen">인보이스 만들기</button>
+
+    <div class="single-result" id="s-result">
+      <div class="qr-amount">
+        <div class="big" id="s-big">0 <small>sats</small></div>
+        <div class="krw" id="s-krw"></div>
+      </div>
+      <div class="qr-box" id="s-qr">
+        <div class="qr-logo">🌽</div>
+      </div>
+      <div class="invoice-str" id="s-inv"></div>
+      <button class="copy-btn" id="s-copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        복사
+      </button>
+    </div>
+  </div>
+
+  <!-- ===== 엔빵 ===== -->
+  <div class="pane" id="pane-split">
+    <div class="field">
+      <label>총 금액</label>
+      <div class="amt-wrap">
+        <input id="t-amt" type="text" inputmode="numeric" placeholder="0">
+        <span class="unit">사토시</span>
+      </div>
+      <div class="chips" id="t-chips">
+        <span class="chip" data-v="30000">30,000</span>
+        <span class="chip" data-v="60000">60,000</span>
+        <span class="chip" data-v="100000">100,000</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>인원 수</label>
+      <div class="amt-wrap">
+        <input id="t-ppl" type="text" inputmode="numeric" placeholder="0">
+        <span class="unit">명</span>
+      </div>
+      <div class="chips" id="ppl-chips">
+        <span class="chip" data-v="2">2명</span>
+        <span class="chip" data-v="3">3명</span>
+        <span class="chip" data-v="4">4명</span>
+        <span class="chip" data-v="5">5명</span>
+        <span class="chip" data-v="6">6명</span>
+      </div>
+    </div>
+
+    <div class="preview" id="t-preview">
+      <div class="pv-row"><span>1인당</span><b id="pv-each">0 sats</b></div>
+      <div class="pv-row"><span>인보이스 개수</span><b id="pv-count">0개</b></div>
+      <div class="pv-note" id="pv-note"></div>
+    </div>
+
+    <button class="cta" id="t-gen" disabled>엔빵 인보이스 만들기</button>
+
+    <!-- 캐러셀 -->
+    <div class="carousel-wrap" id="t-carousel-wrap">
+      <div class="car-head">
+        <div class="title" id="car-title">엔빵 인보이스</div>
+        <button class="reset" id="t-reset">다시 만들기</button>
+      </div>
+
+      <div class="carousel" id="t-carousel"></div>
+
+      <div class="nav">
+        <button id="nav-prev">‹</button>
+        <div class="dots" id="t-dots"></div>
+        <button id="nav-next">›</button>
+      </div>
+
+      <div class="car-actions">
+        <button class="btn-copy-one" id="act-copy">이 인보이스 복사</button>
+        <button class="btn-mark" id="act-mark">받음 표시</button>
+      </div>
+
+      <div class="summary-bar">
+        <span>받은 인원</span>
+        <b id="sum-paid">0 / 0명</b>
+      </div>
+    </div>
+
+    <div class="hint" id="split-hint"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+/* ---------- 공통 ---------- */
+const $=s=>document.querySelector(s);
+const fmt=n=>Number(n).toLocaleString('ko-KR');
+const SAT_KRW=1.4; // 데모용 환율(1 sat ≈ 1.4원 가정)
+const krw=sats=> sats? '약 '+fmt(Math.round(sats*SAT_KRW))+'원':'';
+
+function toast(msg){
+  const t=$('#toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1600);
+}
+function onlyNum(el){ el.addEventListener('input',()=>{
+  let v=el.value.replace(/[^0-9]/g,''); 
+  el.value = v? fmt(parseInt(v,10)) : '';
+});}
+const val=el=>parseInt((el.value||'0').replace(/[^0-9]/g,''),10)||0;
+
+// 데모 인보이스 문자열 생성 (실제 결제용 아님)
+function demoInvoice(sats){
+  const c='023456789acdefghjklmnpqrstuvwxyz';
+  let r=''; for(let i=0;i<60;i++) r+=c[Math.floor(Math.random()*c.length)];
+  return 'lnbc'+sats+'n1p'+r;
+}
+function makeQR(box,text){
+  // 로고 div는 남기고 기존 qr만 제거
+  [...box.querySelectorAll('img,canvas')].forEach(e=>e.remove());
+  new QRCode(box,{text,width:202,height:202,correctLevel:QRCode.CorrectLevel.H});
+}
+
+/* ---------- 탭 ---------- */
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  $('#pane-'+t.dataset.tab).classList.add('active');
+});
+
+/* ---------- 칩 ---------- */
+function bindChips(wrap,input){
+  wrap.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
+    input.value=fmt(parseInt(c.dataset.v,10));
+    input.dispatchEvent(new Event('input'));
+  });
+}
+
+/* ===== 단건 ===== */
+onlyNum($('#s-amt')); bindChips($('#s-chips'),$('#s-amt'));
+$('#s-gen').onclick=()=>{
+  const a=val($('#s-amt'));
+  if(a<=0){toast('금액을 입력해줘');return;}
+  $('#s-big').innerHTML=fmt(a)+' <small>sats</small>';
+  $('#s-krw').textContent=krw(a);
+  const inv=demoInvoice(a);
+  $('#s-inv').textContent=inv;
+  $('#s-result').classList.add('show');
+  makeQR($('#s-qr'),inv);
+  $('#s-copy').dataset.inv=inv;
+  $('#s-result').scrollIntoView({behavior:'smooth',block:'center'});
+};
+$('#s-copy').onclick=function(){
+  navigator.clipboard?.writeText(this.dataset.inv||'');
+  this.classList.add('done'); this.childNodes[2].textContent=' 복사됨!';
+  toast('인보이스 복사 완료');
+  setTimeout(()=>{this.classList.remove('done');this.childNodes[2].textContent=' 복사';},1500);
+};
+
+/* ===== 엔빵 ===== */
+onlyNum($('#t-amt')); onlyNum($('#t-ppl'));
+bindChips($('#t-chips'),$('#t-amt')); bindChips($('#ppl-chips'),$('#t-ppl'));
+
+function splitAmounts(total,ppl){
+  const base=Math.floor(total/ppl), rem=total%ppl;
+  return Array.from({length:ppl},(_,i)=>base+(i<rem?1:0));
+}
+function refreshPreview(){
+  const total=val($('#t-amt')), ppl=val($('#t-ppl'));
+  const pv=$('#t-preview'), gen=$('#t-gen');
+  if(total>0&&ppl>=2){
+    const arr=splitAmounts(total,ppl);
+    const uneven=arr[0]!==arr[arr.length-1];
+    $('#pv-each').textContent= uneven
+      ? fmt(arr[arr.length-1])+' ~ '+fmt(arr[0])+' sats'
+      : fmt(arr[0])+' sats';
+    $('#pv-count').textContent=ppl+'개';
+    $('#pv-note').textContent= uneven
+      ? '나누어 떨어지지 않아 일부에게 1 sat씩 더 배분돼.'
+      : '딱 나누어 떨어져!';
+    pv.classList.add('show'); gen.disabled=false;
+  }else{ pv.classList.remove('show'); gen.disabled=true; }
+}
+$('#t-amt').addEventListener('input',refreshPreview);
+$('#t-ppl').addEventListener('input',refreshPreview);
+
+let slides=[],cur=0,total=0,ppl=0,amounts=[];
+$('#t-gen').onclick=()=>{
+  total=val($('#t-amt')); ppl=val($('#t-ppl'));
+  if(total<=0||ppl<2){toast('총액과 인원(2명 이상)을 확인해줘');return;}
+  amounts=splitAmounts(total,ppl);
+  buildCarousel();
+  $('#t-carousel-wrap').classList.add('show');
+  $('#car-title').textContent='엔빵 · 총 '+fmt(total)+' sats';
+  $('#split-hint').textContent='카드를 옆으로 스와이프해서 각자에게 QR을 보여주거나, "이 인보이스 복사"로 한 명씩 전달해줘.';
+  $('#t-carousel-wrap').scrollIntoView({behavior:'smooth',block:'start'});
+};
+$('#t-reset').onclick=()=>{
+  $('#t-carousel-wrap').classList.remove('show');
+  $('#split-hint').textContent='';
+  window.scrollTo({top:0,behavior:'smooth'});
+};
+
+function buildCarousel(){
+  const car=$('#t-carousel'); car.innerHTML='';
+  const dots=$('#t-dots'); dots.innerHTML='';
+  slides=[];
+  amounts.forEach((amt,i)=>{
+    const inv=demoInvoice(amt);
+    const s=document.createElement('div');
+    s.className='slide'; s.dataset.inv=inv; s.dataset.paid='0';
+    s.innerHTML=`
+      <div class="badge"><span class="num">${i+1}</span> ${i+1}번 / ${ppl}명</div>
+      <div class="pamt">${fmt(amt)} <small>sats</small></div>
+      <div class="paid-tag">✓ 받음</div>
+      <div class="qr-box"><div class="qr-logo">🌽</div></div>
+      <div class="invoice-str">${inv}</div>`;
+    car.appendChild(s);
+    makeQR(s.querySelector('.qr-box'),inv);
+    slides.push(s);
+    const d=document.createElement('span'); d.className='dot'+(i===0?' active':'');
+    dots.appendChild(d);
+  });
+  cur=0; updateNav(); updateSummary();
+  car.onscroll=()=>{
+    const idx=Math.round(car.scrollLeft/(car.scrollWidth/slides.length));
+    if(idx!==cur){cur=Math.min(idx,slides.length-1);updateNav();}
+  };
+}
+function scrollTo(i){
+  const car=$('#t-carousel');
+  car.scrollTo({left:i*(car.scrollWidth/slides.length),behavior:'smooth'});
+  cur=i; updateNav();
+}
+function updateNav(){
+  $('#t-dots').querySelectorAll('.dot').forEach((d,i)=>d.classList.toggle('active',i===cur));
+  $('#nav-prev').disabled=cur===0;
+  $('#nav-next').disabled=cur===slides.length-1;
+}
+$('#nav-prev').onclick=()=>cur>0&&scrollTo(cur-1);
+$('#nav-next').onclick=()=>cur<slides.length-1&&scrollTo(cur+1);
+
+$('#act-copy').onclick=()=>{
+  const inv=slides[cur].dataset.inv;
+  navigator.clipboard?.writeText(inv);
+  toast((cur+1)+'번 인보이스 복사됨');
+};
+$('#act-mark').onclick=()=>{
+  const s=slides[cur];
+  const paid=s.dataset.paid==='1';
+  s.dataset.paid=paid?'0':'1';
+  s.classList.toggle('paid',!paid);
+  updateSummary();
+  if(!paid){ toast((cur+1)+'번 받음 처리'); 
+    if(cur<slides.length-1) setTimeout(()=>scrollTo(cur+1),350); }
+};
+function updateSummary(){
+  const paid=slides.filter(s=>s.dataset.paid==='1').length;
+  $('#sum-paid').textContent=paid+' / '+ppl+'명';
+}
+</script>
+</body>
+</html>
