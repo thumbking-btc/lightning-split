@@ -11,8 +11,17 @@ Lightning Split은 공동 비용을 Lightning invoice로 나누어 정산하기 
 
 ```bash
 npm install
+npm run setup:dev-secret
 npm run verify
 ```
+
+`setup:dev-secret`는 로컬 개발용 `VERIFICATION_TOKEN_SECRET`을 `.dev.vars`에 생성합니다. 이 파일은 Git에 포함되지 않습니다. 운영 배포 전에는 별도의 32바이트 비밀값을 Cloudflare Worker secret으로 설정하십시오.
+
+```bash
+npx wrangler secret put VERIFICATION_TOKEN_SECRET
+```
+
+invoice 생성과 settlement 조회의 공개 API 제한값은 `wrangler.jsonc`의 rate-limit binding에서 조정합니다. 재시도 안내 시간은 `src/config/policies.ts`에 분리되어 있습니다.
 
 ## 휴대폰에서 실행
 

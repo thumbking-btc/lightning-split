@@ -1,0 +1,2 @@
+# Generate a different 32-byte key for each environment. Never commit the real value.
+VERIFICATION_TOKEN_SECRET=<64 lowercase hexadecimal characters>

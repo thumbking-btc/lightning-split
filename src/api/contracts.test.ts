@@ -39,16 +39,42 @@ describe("Worker API DTO validation", () => {
     ).toThrowError();
   });
 
-  it("accepts only opaque v4 verification tokens", () => {
+  it("accepts only sealed tokens linked to an invoice and payment hash", () => {
+    const token = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
     expect(
       parseSettlementRequest({
-        verificationToken: "123e4567-e89b-42d3-a456-426614174000",
+        verificationToken: token,
+        paymentHash: "11".repeat(32),
+        bolt11: "lnbc1test",
       }),
-    ).toEqual({ verificationToken: "123e4567-e89b-42d3-a456-426614174000" });
+    ).toEqual({
+      verificationToken: token,
+      paymentHash: "11".repeat(32),
+      bolt11: "lnbc1test",
+    });
     expect(() =>
       parseSettlementRequest({
         verificationToken: "https://wallet.example/verify",
       }),
     ).toThrowError();
+  });
+
+  it("keeps provider comment opt-in and validates retry exclusions", () => {
+    const parsed = parseBatchInvoiceRequest({
+      address: "user@wallet.example",
+      slots: [{ slotNumber: 1, targetSats: "1000", attempt: 2 }],
+      excludedPaymentHashes: ["11".repeat(32)],
+      excludedInvoices: ["lnbc1test"],
+      providerComment: "8/30 고깃집 저녁",
+    });
+    expect(parsed.providerComment).toBe("8/30 고깃집 저녁");
+    expect(parsed.excludedPaymentHashes).toEqual(["11".repeat(32)]);
+    expect(parsed.excludedInvoices).toEqual(["lnbc1test"]);
+
+    const withoutComment = parseBatchInvoiceRequest({
+      address: "user@wallet.example",
+      slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+    });
+    expect(withoutComment.providerComment).toBeUndefined();
   });
 });

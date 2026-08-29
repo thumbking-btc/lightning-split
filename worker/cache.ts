@@ -3,12 +3,16 @@ import {
   serializePriceSnapshot,
 } from "../src/api/serialization";
 import type { PriceSnapshot } from "../src/domain/models";
-import { InfrastructureError } from "../src/infrastructure/errors";
-import { isRecord } from "../src/infrastructure/validation";
 import type { PriceSnapshotCache } from "../src/pricing/service";
+import type {
+  PremiumReference,
+  PremiumReferenceCache,
+} from "../src/pricing/premium";
+import { parsePremiumReference } from "../src/pricing/premium";
 
 const INTERNAL_CACHE_ORIGIN = "https://cache.lightning-split.invalid";
 const PRICE_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/current`;
+const PREMIUM_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/premium-reference`;
 
 export class WorkerPriceSnapshotCache implements PriceSnapshotCache {
   constructor(private readonly cache: Cache = caches.default) {}
@@ -34,69 +38,26 @@ export class WorkerPriceSnapshotCache implements PriceSnapshotCache {
   }
 }
 
-export interface VerificationContext {
-  readonly verifyUrl: string;
-  readonly expectedPaymentHash: string;
-  readonly expectedInvoice: string;
-  readonly expiresAt: string;
-}
-
-function contextCacheKey(token: string): string {
-  return `${INTERNAL_CACHE_ORIGIN}/verification/${token}`;
-}
-
-function parseVerificationContext(value: unknown): VerificationContext {
-  if (
-    !isRecord(value) ||
-    typeof value.verifyUrl !== "string" ||
-    typeof value.expectedPaymentHash !== "string" ||
-    typeof value.expectedInvoice !== "string" ||
-    typeof value.expiresAt !== "string" ||
-    !Number.isFinite(Date.parse(value.expiresAt))
-  ) {
-    throw new InfrastructureError(
-      "INVALID_RESPONSE",
-      "The verification context is invalid.",
-    );
-  }
-  return {
-    verifyUrl: value.verifyUrl,
-    expectedPaymentHash: value.expectedPaymentHash,
-    expectedInvoice: value.expectedInvoice,
-    expiresAt: value.expiresAt,
-  };
-}
-
-export class VerificationContextStore {
+export class WorkerPremiumReferenceCache implements PremiumReferenceCache {
   constructor(private readonly cache: Cache = caches.default) {}
 
-  async put(context: VerificationContext): Promise<string> {
-    const token = crypto.randomUUID();
-    const ttlSeconds = Math.max(
-      60,
-      Math.floor((Date.parse(context.expiresAt) - Date.now()) / 1_000),
-    );
-    await this.cache.put(
-      contextCacheKey(token),
-      Response.json(context, {
-        headers: { "Cache-Control": `public, max-age=${ttlSeconds}` },
-      }),
-    );
-    return token;
-  }
-
-  async get(token: string): Promise<VerificationContext | null> {
-    const response = await this.cache.match(contextCacheKey(token));
+  async get(): Promise<PremiumReference | null> {
+    const response = await this.cache.match(PREMIUM_CACHE_KEY);
     if (!response) return null;
     try {
-      return parseVerificationContext(await response.json<unknown>());
+      return parsePremiumReference(await response.json<unknown>());
     } catch {
-      await this.delete(token);
+      await this.cache.delete(PREMIUM_CACHE_KEY);
       return null;
     }
   }
 
-  async delete(token: string): Promise<void> {
-    await this.cache.delete(contextCacheKey(token));
+  async put(reference: PremiumReference): Promise<void> {
+    await this.cache.put(
+      PREMIUM_CACHE_KEY,
+      Response.json(reference, {
+        headers: { "Cache-Control": "public, max-age=10" },
+      }),
+    );
   }
 }

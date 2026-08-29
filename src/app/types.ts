@@ -2,7 +2,12 @@ import type { PriceSnapshotDto } from "../api/serialization";
 import type { InputMode, PaymentAnnotation } from "../domain/models";
 
 export type ClientSlotStatus =
-  "generating" | "pending" | "settled" | "expired" | "failed";
+  | "generating"
+  | "pending"
+  | "settled"
+  | "manuallyConfirmed"
+  | "expired"
+  | "failed";
 
 export interface ClientInvoice {
   readonly bolt11: string;
@@ -29,6 +34,7 @@ export interface ClientSlot {
     readonly retryable: boolean;
   };
   readonly settledAt?: string;
+  readonly confirmedAt?: string;
   readonly annotation?: PaymentAnnotation;
 }
 
@@ -47,14 +53,17 @@ export interface SettlementSession {
   readonly payerShareKrw?: string;
   readonly createdAt: string;
   readonly providerDomain?: string;
+  readonly issuedPaymentHashes?: readonly string[];
   readonly slots: readonly ClientSlot[];
 }
 
 export interface SettlementProgress {
-  readonly settledCount: number;
+  readonly completedCount: number;
+  readonly networkSettledCount: number;
+  readonly manuallyConfirmedCount: number;
   readonly totalCount: number;
-  readonly settledSats: bigint;
+  readonly completedSats: bigint;
   readonly totalSats: bigint;
-  readonly settledKrw: bigint;
+  readonly completedKrw: bigint;
   readonly totalKrw: bigint;
 }

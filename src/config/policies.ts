@@ -21,6 +21,11 @@ export interface LightningPolicy {
   readonly maximumBatchSize: number;
 }
 
+export interface ApiRateLimitPolicy {
+  readonly invoiceRetryAfterSeconds: number;
+  readonly settlementRetryAfterSeconds: number;
+}
+
 export const DEFAULT_PRICE_POLICY: Readonly<PricePolicy> = Object.freeze({
   cacheTtlMs: 10_000,
   maxObservationAgeMs: 60_000,
@@ -56,4 +61,12 @@ export const DEFAULT_LIGHTNING_POLICY: Readonly<LightningPolicy> =
     }),
     minimumInvoiceRemainingSeconds: 120,
     maximumBatchSize: 10,
+  });
+
+// The actual request limits live in wrangler.jsonc because Cloudflare enforces
+// them at the binding. Keep these retry windows aligned with that configuration.
+export const DEFAULT_API_RATE_LIMIT_POLICY: Readonly<ApiRateLimitPolicy> =
+  Object.freeze({
+    invoiceRetryAfterSeconds: 60,
+    settlementRetryAfterSeconds: 60,
   });

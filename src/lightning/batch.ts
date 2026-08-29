@@ -16,6 +16,8 @@ export interface GenerateInvoiceBatchInput {
   readonly address: string;
   readonly slots: readonly InvoiceSlotRequest[];
   readonly providerComment?: string;
+  readonly excludedPaymentHashes?: readonly string[];
+  readonly excludedInvoices?: readonly string[];
 }
 
 export interface GenerateInvoiceBatchResult {
@@ -136,8 +138,8 @@ export async function generateInvoiceBatch(
   const discovery = await dependencies.client.discover(input.address);
   assertDiscoverySupportsBatch(discovery, input.slots);
   const results: (PendingInvoiceSlot | FailedInvoiceSlot)[] = [];
-  const invoices = new Set<string>();
-  const hashes = new Set<string>();
+  const invoices = new Set<string>(input.excludedInvoices ?? []);
+  const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
   let abortCause: unknown;
 
   for (const slot of input.slots) {

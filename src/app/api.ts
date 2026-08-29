@@ -131,9 +131,7 @@ function assertFailedSlot(value: unknown): FailedInvoiceSlotDto {
   };
 }
 
-export async function fetchPriceSnapshot(): Promise<
-  PriceResponseDto["snapshot"]
-> {
+export async function fetchPriceInformation(): Promise<PriceResponseDto> {
   const value = await parseApiResponse(
     await fetch("/api/price", { headers: { Accept: "application/json" } }),
   );
@@ -144,7 +142,39 @@ export async function fetchPriceSnapshot(): Promise<
       false,
     );
   }
-  return serializePriceSnapshot(parsePriceSnapshotDto(value.snapshot));
+  const snapshot = serializePriceSnapshot(
+    parsePriceSnapshotDto(value.snapshot),
+  );
+  const premium = value.premium;
+  if (
+    premium !== undefined &&
+    (!isRecord(premium) ||
+      typeof premium.basisPoints !== "string" ||
+      !/^-?\d+$/u.test(premium.basisPoints) ||
+      typeof premium.referencePriceKrw !== "string" ||
+      !/^[1-9]\d*$/u.test(premium.referencePriceKrw) ||
+      typeof premium.retrievedAt !== "string" ||
+      !Number.isFinite(Date.parse(premium.retrievedAt)))
+  ) {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "가격 참고정보 형식이 올바르지 않습니다.",
+      false,
+    );
+  }
+  return {
+    ok: true,
+    snapshot,
+    ...(isRecord(premium)
+      ? {
+          premium: {
+            basisPoints: String(premium.basisPoints),
+            referencePriceKrw: String(premium.referencePriceKrw),
+            retrievedAt: String(premium.retrievedAt),
+          },
+        }
+      : {}),
+  };
 }
 
 export async function requestInvoiceBatch(
@@ -195,9 +225,11 @@ export async function requestInvoiceBatch(
   };
 }
 
-export async function fetchSettlement(
-  verificationToken: string,
-): Promise<SettlementResponseDto> {
+export async function fetchSettlement(input: {
+  readonly verificationToken: string;
+  readonly paymentHash: string;
+  readonly bolt11: string;
+}): Promise<SettlementResponseDto> {
   const value = await parseApiResponse(
     await fetch("/api/settlement", {
       method: "POST",
@@ -205,7 +237,7 @@ export async function fetchSettlement(
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ verificationToken }),
+      body: JSON.stringify(input),
     }),
   );
   if (

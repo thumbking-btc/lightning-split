@@ -37,7 +37,7 @@ function isStoredInvoice(value: unknown): boolean {
     typeof value.providerDomain === "string" &&
     (value.verificationToken === undefined ||
       (typeof value.verificationToken === "string" &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+        /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u.test(
           value.verificationToken,
         )))
   );
@@ -50,6 +50,20 @@ function isStoredAnnotation(value: unknown): boolean {
       typeof value.displayName === "string") &&
     (value.note === undefined || typeof value.note === "string") &&
     isIsoTimestamp(value.updatedAt)
+  );
+}
+
+function isStoredPaymentHashList(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= 100 &&
+      value.every(
+        (paymentHash) =>
+          typeof paymentHash === "string" &&
+          /^[0-9a-f]{64}$/u.test(paymentHash),
+      ) &&
+      new Set(value).size === value.length)
   );
 }
 
@@ -78,12 +92,19 @@ function isStoredSlot(value: unknown): boolean {
   if (
     value.status !== "pending" &&
     value.status !== "settled" &&
-    value.status !== "expired"
+    value.status !== "expired" &&
+    value.status !== "manuallyConfirmed"
   ) {
     return false;
   }
   if (!isStoredInvoice(value.invoice)) return false;
   if (value.status === "settled" && !isIsoTimestamp(value.settledAt)) {
+    return false;
+  }
+  if (
+    value.status === "manuallyConfirmed" &&
+    !isIsoTimestamp(value.confirmedAt)
+  ) {
     return false;
   }
   return value.annotation === undefined || isStoredAnnotation(value.annotation);
@@ -111,6 +132,7 @@ function isSettlementSession(value: unknown): value is SettlementSession {
       isCanonicalPositiveDecimal(value.payerShareKrw)) &&
     (value.providerDomain === undefined ||
       typeof value.providerDomain === "string") &&
+    isStoredPaymentHashList(value.issuedPaymentHashes) &&
     Array.isArray(value.participantNameCandidates) &&
     value.participantNameCandidates.every((name) => typeof name === "string") &&
     Array.isArray(value.slots) &&

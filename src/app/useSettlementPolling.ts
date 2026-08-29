@@ -55,7 +55,13 @@ export function useSettlementPolling(
         const token = slot.invoice?.verificationToken;
         if (!token) continue;
         try {
-          const response = await fetchSettlement(token);
+          const invoice = slot.invoice;
+          if (!invoice) continue;
+          const response = await fetchSettlement({
+            verificationToken: token,
+            paymentHash: invoice.paymentHash,
+            bolt11: invoice.bolt11,
+          });
           if (cancelled) return;
           failures.set(slot.slotNumber, 0);
           nextDue.set(slot.slotNumber, Date.now() + nextPollingDelay(0));

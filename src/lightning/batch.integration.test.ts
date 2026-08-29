@@ -146,6 +146,27 @@ describe("sequential invoice batch generation", () => {
     expect(mock.callback).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects an invoice or payment hash reused by a slot retry", async () => {
+    const reused = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "retry-reused",
+    });
+    const mock = clientWith(() => Promise.resolve({ invoice: reused.invoice }));
+    const result = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: [slots(1)[0]!],
+        excludedPaymentHashes: [reused.paymentHash],
+        excludedInvoices: [reused.invoice],
+      },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+    expect(result.slots[0]).toMatchObject({
+      status: "failed",
+      failure: { code: "DUPLICATE_PAYMENT_HASH" },
+    });
+  });
+
   it("stops after an invalid BOLT11 response", async () => {
     const mock = clientWith(() => Promise.resolve({ invoice: "lnbc-invalid" }));
     const result = await generateInvoiceBatch(

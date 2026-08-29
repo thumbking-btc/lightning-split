@@ -34,7 +34,7 @@ function pendingSession(expiresAt: string): SettlementSession {
           payeeNodeId: `02${"11".repeat(32)}`,
           featureBits: [],
           providerDomain: "wallet.example",
-          verificationToken: "123e4567-e89b-42d3-a456-426614174000",
+          verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
         },
       },
     ],

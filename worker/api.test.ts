@@ -1,19 +1,22 @@
-import {
-  createExecutionContext,
-  waitOnExecutionContext,
-} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestBolt11 } from "../src/test/bolt11-fixture";
-import worker from "./index";
+import worker, { handleApiRequest } from "./index";
 import { network } from "./test/network";
+import { sealVerificationContext } from "./verification";
 
 const APP_ORIGIN = "https://app.example";
 const DISCOVERY_URL = "https://wallet.example/.well-known/lnurlp/user";
 const CALLBACK_URL = "https://wallet.example/callback";
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
+const TEST_SECRET = "11".repeat(32);
+const TEST_ENV = {
+  INVOICE_RATE_LIMITER: env.INVOICE_RATE_LIMITER,
+  SETTLEMENT_RATE_LIMITER: env.SETTLEMENT_RATE_LIMITER,
+  VERIFICATION_TOKEN_SECRET: TEST_SECRET,
+};
 
 function apiRequest(
   path: string,
@@ -50,10 +53,9 @@ function mockDiscovery(): void {
 
 async function callWorker(
   request: Request<unknown, IncomingRequestCfProperties>,
-): Promise<{ response: Response; ctx: ExecutionContext }> {
-  const ctx = createExecutionContext();
-  const response = await worker.fetch(request, env, ctx);
-  return { response, ctx };
+): Promise<{ response: Response }> {
+  const response = await worker.fetch(request, TEST_ENV);
+  return { response };
 }
 
 describe("Lightning Split Worker API", () => {
@@ -63,17 +65,28 @@ describe("Lightning Split Worker API", () => {
     );
   });
 
+  afterEach(() => vi.useRealTimers());
+
   it("returns an Upbit price snapshot and uses Bithumb fallback independently", async () => {
     const timestamp = Date.now();
     network.use(
-      http.get("https://api.upbit.com/v1/ticker", () =>
+      http.get("https://api.upbit.com/v1/ticker", ({ request }) =>
         HttpResponse.json([
-          {
-            market: "KRW-BTC",
-            trade_price: 120_000_000,
-            trade_timestamp: timestamp,
-          },
+          new URL(request.url).searchParams.get("markets") === "KRW-USDT"
+            ? {
+                market: "KRW-USDT",
+                trade_price: 1_400,
+                trade_timestamp: timestamp,
+              }
+            : {
+                market: "KRW-BTC",
+                trade_price: 120_000_000,
+                trade_timestamp: timestamp,
+              },
         ]),
+      ),
+      http.get("https://api.binance.com/api/v3/ticker/price", () =>
+        HttpResponse.json({ symbol: "BTCUSDT", price: "80000" }),
       ),
     );
     const primary = await callWorker(apiRequest("/api/price"));
@@ -81,6 +94,7 @@ describe("Lightning Split Worker API", () => {
     await expect(primary.response.json()).resolves.toMatchObject({
       ok: true,
       snapshot: { source: "upbit", priceKrw: "120000000", fallbackUsed: false },
+      premium: { basisPoints: "714" },
     });
 
     await caches.default.delete(
@@ -178,7 +192,7 @@ describe("Lightning Split Worker API", () => {
     expect(callbackCount).toBe(3);
   });
 
-  it("keeps verify URLs server-side and settles through an opaque token", async () => {
+  it("keeps verify URLs sealed and settles without cache-local context", async () => {
     mockDiscovery();
     let invoice = "";
     network.use(
@@ -206,20 +220,27 @@ describe("Lightning Split Worker API", () => {
       }),
     );
     const batchBody = (await batch.response.json()) as {
-      slots: [{ invoice: { verificationToken: string } }];
+      slots: [
+        {
+          invoice: {
+            verificationToken: string;
+            paymentHash: string;
+            bolt11: string;
+          };
+        },
+      ];
     };
     const serialized = JSON.stringify(batchBody);
     expect(serialized).not.toContain("wallet.example/verify");
-    expect(batchBody.slots[0].invoice.verificationToken).toMatch(
-      /^[0-9a-f-]{36}$/u,
-    );
+    expect(batchBody.slots[0].invoice.verificationToken).toMatch(/^v1\./u);
 
     const settlement = await callWorker(
       apiRequest("/api/settlement", {
         verificationToken: batchBody.slots[0].invoice.verificationToken,
+        paymentHash: batchBody.slots[0].invoice.paymentHash,
+        bolt11: batchBody.slots[0].invoice.bolt11,
       }),
     );
-    await waitOnExecutionContext(settlement.ctx);
     await expect(settlement.response.json()).resolves.toMatchObject({
       ok: true,
       status: "settled",
@@ -229,11 +250,102 @@ describe("Lightning Split Worker API", () => {
     const repeated = await callWorker(
       apiRequest("/api/settlement", {
         verificationToken: batchBody.slots[0].invoice.verificationToken,
+        paymentHash: batchBody.slots[0].invoice.paymentHash,
+        bolt11: batchBody.slots[0].invoice.bolt11,
       }),
     );
     await expect(repeated.response.json()).resolves.toMatchObject({
       ok: true,
-      status: "notAvailable",
+      status: "settled",
+    });
+  });
+
+  it("returns expired from authenticated token context without provider access", async () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const fixture = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "worker-expired-token",
+      timestamp: Math.floor(now / 1_000),
+      expirySeconds: 3_600,
+    });
+    const token = await sealVerificationContext(
+      {
+        verifyUrl: "https://wallet.example/verify/expired",
+        expectedPaymentHash: fixture.paymentHash,
+        expectedInvoice: fixture.invoice,
+        expiresAt: new Date(now + 1_000).toISOString(),
+      },
+      TEST_SECRET,
+      now,
+    );
+    vi.setSystemTime(now + 2_000);
+    const result = await callWorker(
+      apiRequest("/api/settlement", {
+        verificationToken: token,
+        paymentHash: fixture.paymentHash,
+        bolt11: fixture.invoice,
+      }),
+    );
+    expect(result.response.status).toBe(200);
+    await expect(result.response.json()).resolves.toEqual({
+      ok: true,
+      status: "expired",
+      settled: false,
+    });
+  });
+
+  it("returns 429 for invoice and settlement limiter denials", async () => {
+    const allow = { limit: () => Promise.resolve({ success: true }) };
+    const deny = { limit: () => Promise.resolve({ success: false }) };
+    const invoiceResponse = await handleApiRequest(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [],
+      }),
+      {
+        INVOICE_RATE_LIMITER: deny,
+        SETTLEMENT_RATE_LIMITER: allow,
+        VERIFICATION_TOKEN_SECRET: TEST_SECRET,
+      },
+    );
+    expect(invoiceResponse.status).toBe(429);
+    expect(invoiceResponse.headers.get("retry-after")).toBe("60");
+    await expect(invoiceResponse.json()).resolves.toMatchObject({
+      error: {
+        code: "RATE_LIMITED",
+        message: "요청이 너무 많습니다. 잠시 후 다시 시도하십시오.",
+      },
+    });
+
+    const settlementResponse = await handleApiRequest(
+      apiRequest("/api/settlement", {}),
+      {
+        INVOICE_RATE_LIMITER: allow,
+        SETTLEMENT_RATE_LIMITER: deny,
+        VERIFICATION_TOKEN_SECRET: TEST_SECRET,
+      },
+    );
+    expect(settlementResponse.status).toBe(429);
+  });
+
+  it("fails closed before provider access when the sealing secret is invalid", async () => {
+    const allow = { limit: () => Promise.resolve({ success: true }) };
+    const response = await handleApiRequest(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+      }),
+      {
+        INVOICE_RATE_LIMITER: allow,
+        SETTLEMENT_RATE_LIMITER: allow,
+        VERIFICATION_TOKEN_SECRET: "not-a-32-byte-key",
+      },
+    );
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "CONFIGURATION_ERROR" },
     });
   });
 

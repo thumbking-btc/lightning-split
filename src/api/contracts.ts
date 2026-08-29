@@ -17,6 +17,11 @@ export interface ApiErrorDto {
 export interface PriceResponseDto {
   readonly ok: true;
   readonly snapshot: PriceSnapshotDto;
+  readonly premium?: {
+    readonly basisPoints: string;
+    readonly referencePriceKrw: string;
+    readonly retrievedAt: string;
+  };
 }
 
 export interface BatchInvoiceRequestDto {
@@ -27,6 +32,9 @@ export interface BatchInvoiceRequestDto {
     readonly targetSats: string;
     readonly attempt: number;
   }[];
+  readonly excludedPaymentHashes?: readonly string[];
+  readonly excludedInvoices?: readonly string[];
+  readonly providerComment?: string;
 }
 
 export interface PendingInvoiceSlotDto {
@@ -75,6 +83,8 @@ export interface BatchInvoiceResponseDto {
 
 export interface SettlementRequestDto {
   readonly verificationToken: string;
+  readonly paymentHash: string;
+  readonly bolt11: string;
 }
 
 export interface SettlementResponseDto {
@@ -99,6 +109,9 @@ function parsePositiveSafeInteger(value: unknown, field: string): number {
 export function parseBatchInvoiceRequest(value: unknown): {
   readonly address: string;
   readonly slots: readonly InvoiceSlotRequest[];
+  readonly excludedPaymentHashes: readonly string[];
+  readonly excludedInvoices: readonly string[];
+  readonly providerComment?: string;
 } {
   if (
     !isRecord(value) ||
@@ -154,22 +167,85 @@ export function parseBatchInvoiceRequest(value: unknown): {
       ...(krwShare === undefined ? {} : { krwShare }),
     };
   });
-  return Object.freeze({ address: value.address, slots: Object.freeze(slots) });
+  const parseStringList = (
+    input: unknown,
+    field: string,
+    pattern: RegExp,
+    maximumLength: number,
+    maximumItems: number,
+  ): readonly string[] => {
+    if (input === undefined) return [];
+    if (
+      !Array.isArray(input) ||
+      input.length > maximumItems ||
+      !input.every(
+        (item) =>
+          typeof item === "string" &&
+          item.length <= maximumLength &&
+          pattern.test(item),
+      )
+    ) {
+      throw new InfrastructureError("INVALID_INPUT", `${field} is invalid.`);
+    }
+    return Object.freeze([...new Set(input)]);
+  };
+  const excludedPaymentHashes = parseStringList(
+    value.excludedPaymentHashes,
+    "excludedPaymentHashes",
+    /^[0-9a-f]{64}$/u,
+    64,
+    100,
+  );
+  const excludedInvoices = parseStringList(
+    value.excludedInvoices,
+    "excludedInvoices",
+    /^lnbc[0123456789acdefghjklmnpqrstuvwxyz]+$/u,
+    1_200,
+    10,
+  );
+  if (
+    value.providerComment !== undefined &&
+    (typeof value.providerComment !== "string" ||
+      value.providerComment.length < 1 ||
+      [...value.providerComment].length > 120)
+  ) {
+    throw new InfrastructureError(
+      "INVALID_INPUT",
+      "providerComment is invalid.",
+    );
+  }
+  return Object.freeze({
+    address: value.address,
+    slots: Object.freeze(slots),
+    excludedPaymentHashes,
+    excludedInvoices,
+    ...(typeof value.providerComment === "string"
+      ? { providerComment: value.providerComment }
+      : {}),
+  });
 }
 
-const TOKEN_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const TOKEN_PATTERN = /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 
 export function parseSettlementRequest(value: unknown): SettlementRequestDto {
   if (
     !isRecord(value) ||
     typeof value.verificationToken !== "string" ||
-    !TOKEN_PATTERN.test(value.verificationToken)
+    !TOKEN_PATTERN.test(value.verificationToken) ||
+    typeof value.paymentHash !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.paymentHash) ||
+    typeof value.bolt11 !== "string" ||
+    value.bolt11.length > 1_200 ||
+    !/^lnbc[0123456789acdefghjklmnpqrstuvwxyz]+$/u.test(value.bolt11)
   ) {
     throw new InfrastructureError(
       "INVALID_INPUT",
       "The verification token is invalid.",
     );
   }
-  return Object.freeze({ verificationToken: value.verificationToken });
+  return Object.freeze({
+    verificationToken: value.verificationToken,
+    paymentHash: value.paymentHash,
+    bolt11: value.bolt11,
+  });
 }

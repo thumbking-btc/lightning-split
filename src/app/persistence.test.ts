@@ -22,6 +22,7 @@ const SESSION: SettlementSession = {
   lightningAddress: "user@wallet.example",
   participantNameCandidates: ["민수", "철수"],
   createdAt: "2030-01-01T00:00:00.000Z",
+  issuedPaymentHashes: ["11".repeat(32)],
   slots: [
     {
       slotNumber: 1,
@@ -39,7 +40,7 @@ const SESSION: SettlementSession = {
         payeeNodeId: `02${"11".repeat(32)}`,
         featureBits: [],
         providerDomain: "wallet.example",
-        verificationToken: "123e4567-e89b-42d3-a456-426614174000",
+        verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
       },
       annotation: {
         displayName: "철수",
@@ -68,5 +69,23 @@ describe("local settlement persistence", () => {
     await expect(loadActiveSession()).resolves.toEqual(SESSION);
     await clearActiveSession();
     await expect(loadActiveSession()).resolves.toBeNull();
+  });
+
+  it("restores a manual confirmation as user-provided state", () => {
+    const manual: SettlementSession = {
+      ...SESSION,
+      slots: [
+        {
+          ...SESSION.slots[0]!,
+          status: "manuallyConfirmed",
+          confirmedAt: "2030-01-01T00:05:00.000Z",
+        },
+      ],
+    };
+    expect(restoreSession(serializeSession(manual)).slots[0]).toMatchObject({
+      status: "manuallyConfirmed",
+      confirmedAt: "2030-01-01T00:05:00.000Z",
+      annotation: { displayName: "철수" },
+    });
   });
 });

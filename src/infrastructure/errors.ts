@@ -15,7 +15,8 @@ export type InfrastructureErrorCode =
   | "COMMENT_TOO_LONG"
   | "INVALID_BOLT11"
   | "DUPLICATE_PAYMENT_HASH"
-  | "BATCH_ABORTED";
+  | "BATCH_ABORTED"
+  | "CONFIGURATION_ERROR";
 
 export interface InfrastructureErrorOptions {
   readonly retryable?: boolean;

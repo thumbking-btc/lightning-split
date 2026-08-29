@@ -19,13 +19,27 @@ import { generateInvoiceBatch } from "../src/lightning/batch";
 import { LnurlPayClient } from "../src/lightning/lnurl";
 import { checkSettlement } from "../src/lightning/settlement";
 import {
+  BinanceUpbitPremiumAdapter,
+  KimchiPremiumService,
+} from "../src/pricing/premium";
+import {
   BithumbPriceAdapter,
   PriceSnapshotService,
   PriceSnapshotUnavailableError,
   UpbitPriceAdapter,
 } from "../src/pricing/service";
-import { VerificationContextStore, WorkerPriceSnapshotCache } from "./cache";
+import { WorkerPremiumReferenceCache, WorkerPriceSnapshotCache } from "./cache";
+import { enforceRateLimit } from "./rateLimit";
 import { readBoundedRequestJson } from "./request";
+import {
+  assertVerificationLink,
+  openVerificationContext,
+  sealVerificationContext,
+} from "./verification";
+
+type AppEnv = Env & {
+  readonly VERIFICATION_TOKEN_SECRET?: string;
+};
 
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -33,8 +47,18 @@ const JSON_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 } as const;
 
-function jsonResponse<T>(value: T, status = 200): Response {
-  return new Response(JSON.stringify(value), { status, headers: JSON_HEADERS });
+function jsonResponse<T>(
+  value: T,
+  status = 200,
+  additionalHeaders?: HeadersInit,
+): Response {
+  const headers = new Headers(JSON_HEADERS);
+  if (additionalHeaders) {
+    new Headers(additionalHeaders).forEach((headerValue, name) =>
+      headers.set(name, headerValue),
+    );
+  }
+  return new Response(JSON.stringify(value), { status, headers });
 }
 
 function assertSameOrigin(request: Request): void {
@@ -53,6 +77,7 @@ function errorStatus(error: InfrastructureError): number {
   if (error.code === "NETWORK_ERROR" || error.code === "HTTP_ERROR") return 502;
   if (error.code === "PROVIDER_REJECTED") return 422;
   if (error.code === "RESPONSE_TOO_LARGE") return 413;
+  if (error.code === "CONFIGURATION_ERROR") return 500;
   return 400;
 }
 
@@ -92,7 +117,13 @@ function errorResponse(error: unknown, path: string): Response {
         : { retryAfterSeconds: infrastructureError.retryAfterSeconds }),
     },
   };
-  return jsonResponse(body, errorStatus(infrastructureError));
+  return jsonResponse(
+    body,
+    errorStatus(infrastructureError),
+    infrastructureError.retryAfterSeconds === undefined
+      ? undefined
+      : { "Retry-After": String(infrastructureError.retryAfterSeconds) },
+  );
 }
 
 async function handlePrice(): Promise<Response> {
@@ -102,20 +133,52 @@ async function handlePrice(): Promise<Response> {
     new WorkerPriceSnapshotCache(),
   );
   const snapshot = await service.getSnapshot();
+  const premium = await new KimchiPremiumService(
+    new BinanceUpbitPremiumAdapter(),
+    new WorkerPremiumReferenceCache(),
+  )
+    .getInformation(snapshot.priceKrw)
+    .catch(() => undefined);
   const body: PriceResponseDto = {
     ok: true,
     snapshot: serializePriceSnapshot(snapshot),
+    ...(premium === undefined
+      ? {}
+      : {
+          premium: {
+            basisPoints: premium.basisPoints.toString(),
+            referencePriceKrw: premium.referencePriceKrw.toString(),
+            retrievedAt: premium.retrievedAt,
+          },
+        }),
   };
   return jsonResponse(body);
 }
 
-async function handleInvoices(request: Request): Promise<Response> {
+function verificationSecret(env: AppEnv): string {
+  if (
+    !env.VERIFICATION_TOKEN_SECRET ||
+    !/^[0-9a-f]{64}$/u.test(env.VERIFICATION_TOKEN_SECRET)
+  ) {
+    throw new InfrastructureError(
+      "CONFIGURATION_ERROR",
+      "결제 확인 보안 설정이 준비되지 않았습니다.",
+    );
+  }
+  return env.VERIFICATION_TOKEN_SECRET;
+}
+
+async function handleInvoices(
+  request: Request,
+  env: AppEnv,
+): Promise<Response> {
   assertSameOrigin(request);
+  await enforceRateLimit(request, env.INVOICE_RATE_LIMITER, "invoices");
   const input = parseBatchInvoiceRequest(await readBoundedRequestJson(request));
+  const secret = verificationSecret(env);
   const result = await generateInvoiceBatch(input, {
     client: new LnurlPayClient(),
   });
-  const verificationStore = new VerificationContextStore();
   const slots = await Promise.all(
     result.slots.map(
       async (slot): Promise<PendingInvoiceSlotDto | FailedInvoiceSlotDto> => {
@@ -131,12 +194,15 @@ async function handleInvoices(request: Request): Promise<Response> {
           return { ...base, status: "failed", failure: slot.failure };
         }
         const verificationToken = slot.invoice.verifyUrl
-          ? await verificationStore.put({
-              verifyUrl: slot.invoice.verifyUrl,
-              expectedPaymentHash: slot.invoice.paymentHash,
-              expectedInvoice: slot.invoice.bolt11,
-              expiresAt: slot.invoice.expiresAt,
-            })
+          ? await sealVerificationContext(
+              {
+                verifyUrl: slot.invoice.verifyUrl,
+                expectedPaymentHash: slot.invoice.paymentHash,
+                expectedInvoice: slot.invoice.bolt11,
+                expiresAt: slot.invoice.expiresAt,
+              },
+              secret,
+            )
           : undefined;
         return {
           ...base,
@@ -176,22 +242,17 @@ async function handleInvoices(request: Request): Promise<Response> {
 
 async function handleSettlement(
   request: Request,
-  ctx: ExecutionContext,
+  env: AppEnv,
 ): Promise<Response> {
   assertSameOrigin(request);
+  await enforceRateLimit(request, env.SETTLEMENT_RATE_LIMITER, "settlement");
   const input = parseSettlementRequest(await readBoundedRequestJson(request));
-  const store = new VerificationContextStore();
-  const context = await store.get(input.verificationToken);
-  if (!context) {
-    const body: SettlementResponseDto = {
-      ok: true,
-      status: "notAvailable",
-      settled: false,
-    };
-    return jsonResponse(body);
-  }
-  if (Date.parse(context.expiresAt) <= Date.now()) {
-    ctx.waitUntil(store.delete(input.verificationToken));
+  const context = await openVerificationContext(
+    input.verificationToken,
+    verificationSecret(env),
+  );
+  await assertVerificationLink(context, input.paymentHash, input.bolt11);
+  if (context.expiresAtMs <= Date.now()) {
     const body: SettlementResponseDto = {
       ok: true,
       status: "expired",
@@ -202,7 +263,7 @@ async function handleSettlement(
   const result = await checkSettlement({
     verifyUrl: context.verifyUrl,
     expectedPaymentHash: context.expectedPaymentHash,
-    expectedInvoice: context.expectedInvoice,
+    expectedInvoice: input.bolt11,
   });
   if (result.status === "notAvailable") {
     const body: SettlementResponseDto = {
@@ -212,7 +273,6 @@ async function handleSettlement(
     };
     return jsonResponse(body);
   }
-  if (result.settled) ctx.waitUntil(store.delete(input.verificationToken));
   const body: SettlementResponseDto = {
     ok: true,
     status: result.status,
@@ -226,16 +286,16 @@ async function handleSettlement(
 
 export async function handleApiRequest(
   request: Request,
-  ctx: ExecutionContext,
+  env: AppEnv,
 ): Promise<Response> {
   const url = new URL(request.url);
   try {
     if (url.pathname === "/api/price" && request.method === "GET")
       return await handlePrice();
     if (url.pathname === "/api/invoices" && request.method === "POST")
-      return await handleInvoices(request);
+      return await handleInvoices(request, env);
     if (url.pathname === "/api/settlement" && request.method === "POST") {
-      return await handleSettlement(request, ctx);
+      return await handleSettlement(request, env);
     }
     return jsonResponse<ApiErrorDto>(
       {
@@ -254,7 +314,7 @@ export async function handleApiRequest(
 }
 
 export default {
-  fetch(request, _env, ctx): Promise<Response> {
-    return handleApiRequest(request, ctx);
+  fetch(request, env): Promise<Response> {
+    return handleApiRequest(request, env);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<AppEnv>;
