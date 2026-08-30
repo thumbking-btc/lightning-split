@@ -293,7 +293,7 @@ describe("Lightning Split Worker API", () => {
     expect(comments).toEqual(["8/30 고깃집 저녁", "8/30 고깃집 저녁"]);
   });
 
-  it("defers later invoices when callback reuse is not explicitly supported", async () => {
+  it("creates every invoice when LUD-11 disposable is omitted", async () => {
     mockDiscovery();
     let callbackCount = 0;
     network.use(
@@ -304,7 +304,7 @@ describe("Lightning Split Worker API", () => {
         return HttpResponse.json({
           pr: createTestBolt11({
             amountSats,
-            fixtureId: "worker-disposable-default",
+            fixtureId: `worker-disposable-default-${callbackCount}`,
             timestamp: Math.floor(Date.now() / 1_000),
           }).invoice,
         });
@@ -325,18 +325,18 @@ describe("Lightning Split Worker API", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      completedCount: 1,
+      completedCount: 3,
       failedCount: 0,
       slots: [
         { status: "pending", slotNumber: 1 },
-        { status: "deferred", slotNumber: 2 },
-        { status: "deferred", slotNumber: 3 },
+        { status: "pending", slotNumber: 2 },
+        { status: "pending", slotNumber: 3 },
       ],
     });
-    expect(callbackCount).toBe(1);
+    expect(callbackCount).toBe(3);
   });
 
-  it("keeps deferred invoice batches parseable by an older cached PWA", async () => {
+  it("creates every invoice for older cached clients without capability negotiation", async () => {
     mockDiscovery();
     let callbackCount = 0;
     network.use(
@@ -347,7 +347,7 @@ describe("Lightning Split Worker API", () => {
         return HttpResponse.json({
           pr: createTestBolt11({
             amountSats,
-            fixtureId: "worker-legacy-deferred",
+            fixtureId: `worker-legacy-client-${callbackCount}`,
             timestamp: Math.floor(Date.now() / 1_000),
           }).invoice,
         });
@@ -367,18 +367,14 @@ describe("Lightning Split Worker API", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      completedCount: 1,
-      failedCount: 1,
+      completedCount: 2,
+      failedCount: 0,
       slots: [
         { status: "pending", slotNumber: 1 },
-        {
-          status: "failed",
-          slotNumber: 2,
-          failure: { code: "INVOICE_DEFERRED", retryable: true },
-        },
+        { status: "pending", slotNumber: 2 },
       ],
     });
-    expect(callbackCount).toBe(1);
+    expect(callbackCount).toBe(2);
   });
 
   it("creates invoices without a comment when the provider does not support it", async () => {

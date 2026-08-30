@@ -170,13 +170,7 @@ export async function generateInvoiceBatch(
   const commentStatuses: ProviderCommentStatus[] = [];
   const descriptionStatuses: Exclude<PaymentDescriptionStatus, "partial">[] =
     [];
-  let deferRemaining = false;
-
   for (const [index, slot] of input.slots.entries()) {
-    if (deferRemaining) {
-      results.push({ ...slot, status: "deferred" });
-      continue;
-    }
     try {
       const slotDiscovery =
         index === 0
@@ -262,8 +256,6 @@ export async function generateInvoiceBatch(
             ? "embedded"
             : "notEmbedded",
         );
-      if (callback.disposable && index < input.slots.length - 1)
-        deferRemaining = true;
     } catch (error) {
       results.push(failureSlot(slot, error));
     }

@@ -35,6 +35,7 @@ export interface LnurlPayDiscovery extends NormalizedLightningAddress {
 
 export interface LnurlInvoiceResponse {
   readonly invoice: string;
+  /** LUD-11 hint for storing the initial LNURL link, not callback or invoice concurrency. */
   readonly disposable: boolean;
   readonly commentSent: boolean;
   readonly verifyUrl?: string;

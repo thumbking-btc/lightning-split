@@ -29,6 +29,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "prompt",
+      filename: "app-sw.js",
       includeAssets: ["lightning-split.svg"],
       manifest: {
         name: "Lightning Split",

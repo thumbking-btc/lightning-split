@@ -397,7 +397,7 @@ describe("sequential invoice batch generation", () => {
     },
   );
 
-  it("defers later invoices when LUD-11 does not explicitly allow reuse", async () => {
+  it("does not treat LUD-11 disposable as a callback or invoice concurrency capability", async () => {
     let call = 0;
     const mock = clientWith((_discovery, amountSats) =>
       Promise.resolve({
@@ -416,10 +416,16 @@ describe("sequential invoice batch generation", () => {
 
     expect(result.slots.map((slot) => slot.status)).toEqual([
       "pending",
-      "deferred",
-      "deferred",
+      "pending",
+      "pending",
     ]);
     expect(result.failedCount).toBe(0);
-    expect(mock.callback).toHaveBeenCalledTimes(1);
+    expect(mock.discover).toHaveBeenCalledTimes(3);
+    expect(mock.callback).toHaveBeenCalledTimes(3);
+    const pending = result.slots.filter((slot) => slot.status === "pending");
+    expect(new Set(pending.map((slot) => slot.invoice.bolt11)).size).toBe(3);
+    expect(new Set(pending.map((slot) => slot.invoice.paymentHash)).size).toBe(
+      3,
+    );
   });
 });
