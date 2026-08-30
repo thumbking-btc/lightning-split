@@ -4,6 +4,9 @@ import type { Fetcher } from "../infrastructure/http";
 import { createTestBolt11 } from "../test/bolt11-fixture";
 import { LnurlPayClient, normalizeLightningAddress } from "./lnurl";
 
+const VALID_NOSTR_PUBKEY =
+  "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
 function jsonFetcher(handler: (url: URL) => unknown): Fetcher {
   return vi.fn((input) =>
     Promise.resolve(
@@ -40,7 +43,7 @@ describe("Lightning Address and LNURL-pay", () => {
         payerData: { name: { mandatory: false } },
         commentAllowed: 40,
         allowsNostr: true,
-        nostrPubkey: "11".repeat(32),
+        nostrPubkey: VALID_NOSTR_PUBKEY,
       })),
     );
     await expect(client.discover("user@wallet.example")).resolves.toMatchObject(
@@ -49,9 +52,32 @@ describe("Lightning Address and LNURL-pay", () => {
         maxSendableMsat: 10_000_000n,
         commentAllowed: 40,
         allowsNostr: true,
+        nostrPubkey: VALID_NOSTR_PUBKEY,
         mandatoryPayerData: [],
       },
     );
+  });
+
+  it("disables advertised NIP-57 when nostrPubkey is not a BIP-340 x-coordinate", async () => {
+    const client = new LnurlPayClient(
+      jsonFetcher(() => ({
+        tag: "payRequest",
+        callback: "https://wallet.example/callback",
+        minSendable: 1_000,
+        maxSendable: 10_000_000,
+        metadata: '[["text/plain","test user"]]',
+        allowsNostr: true,
+        nostrPubkey: "ff".repeat(32),
+      })),
+    );
+
+    await expect(client.discover("user@wallet.example")).resolves.toMatchObject(
+      {
+        allowsNostr: false,
+      },
+    );
+    const discovery = await client.discover("user@wallet.example");
+    expect(discovery.nostrPubkey).toBeUndefined();
   });
 
   it("accepts a LUD-06 discovery document containing a maximum-size image metadata entry", async () => {
@@ -149,8 +175,13 @@ describe("Lightning Address and LNURL-pay", () => {
     ).resolves.toMatchObject({ invoice: longInvoice });
   });
 
-  it("URL-encodes a supplied settlement note in the callback and preserves verify", async () => {
+  it("preserves exact NIP-57, LNURL and comment values in the callback query", async () => {
     const calls: URL[] = [];
+    const requestJson = JSON.stringify({
+      id: "signed-event",
+      content: "8/30 고깃집 저녁 & 회비",
+    });
+    const lnurl = "lnurl1dp68gurn8ghj7example";
     const fetcher = jsonFetcher((url) => {
       calls.push(url);
       if (url.pathname.includes("well-known")) {
@@ -161,6 +192,8 @@ describe("Lightning Address and LNURL-pay", () => {
           maxSendable: 10_000_000,
           metadata: '[["text/plain","test"]]',
           commentAllowed: 40,
+          allowsNostr: true,
+          nostrPubkey: VALID_NOSTR_PUBKEY,
         };
       }
       return { pr: "lnbc-test", verify: "https://wallet.example/verify/one" };
@@ -169,15 +202,123 @@ describe("Lightning Address and LNURL-pay", () => {
     const discovery = await client.discover("user@wallet.example");
     const invoice = await client.requestInvoice(discovery, 1_000n, {
       comment: "8/30 고깃집 저녁",
+      nostr: { requestJson, lnurl },
     });
     expect(calls[1]?.searchParams.get("opaque")).toBe("abc");
     expect(calls[1]?.searchParams.get("amount")).toBe("1000000");
     expect(calls[1]?.searchParams.get("comment")).toBe("8/30 고깃집 저녁");
+    expect(calls[1]?.searchParams.get("nostr")).toBe(requestJson);
+    expect(calls[1]?.searchParams.get("lnurl")).toBe(lnurl);
     expect(calls[1]?.toString()).not.toContain("고깃집");
     expect(invoice.verifyUrl).toBe("https://wallet.example/verify/one");
     expect(invoice.commentSent).toBe(true);
     expect(invoice.disposable).toBe(true);
   });
+
+  it.each([
+    [
+      "message",
+      { tag: "message", message: "결제가 완료되었습니다." },
+      { tag: "message", message: "결제가 완료되었습니다." },
+    ],
+    [
+      "url",
+      {
+        tag: "url",
+        description: "영수증 보기",
+        url: "https://wallet.example/receipt?id=one",
+      },
+      {
+        tag: "url",
+        description: "영수증 보기",
+        url: "https://wallet.example/receipt?id=one",
+      },
+    ],
+    [
+      "aes",
+      {
+        tag: "aes",
+        description: "암호화된 영수증",
+        ciphertext: "AAECAwQFBgcICQoLDA0ODw==",
+        iv: "AAECAwQFBgcICQoLDA0ODw==",
+      },
+      {
+        tag: "aes",
+        description: "암호화된 영수증",
+        ciphertext: "AAECAwQFBgcICQoLDA0ODw==",
+        iv: "AAECAwQFBgcICQoLDA0ODw==",
+      },
+    ],
+  ] as const)(
+    "parses a valid LUD-09 %s success action",
+    async (_tag, action, expected) => {
+      const client = new LnurlPayClient(
+        jsonFetcher((url) =>
+          url.pathname.includes("well-known")
+            ? {
+                tag: "payRequest",
+                callback: "https://wallet.example/callback",
+                minSendable: 1_000,
+                maxSendable: 10_000_000,
+                metadata: '[["text/plain","test"]]',
+              }
+            : { pr: "lnbc-test", successAction: action },
+        ),
+      );
+
+      const discovery = await client.discover("user@wallet.example");
+      await expect(client.requestInvoice(discovery, 1n)).resolves.toMatchObject(
+        {
+          invoice: "lnbc-test",
+          successAction: expected,
+        },
+      );
+    },
+  );
+
+  it.each([
+    {
+      tag: "future-action",
+      value: "unsupported",
+    },
+    {
+      tag: "message",
+      message: "x".repeat(145),
+    },
+    {
+      tag: "url",
+      description: "cross-origin",
+      url: "https://attacker.example/receipt",
+    },
+    {
+      tag: "aes",
+      description: "bad base64",
+      ciphertext: "***",
+      iv: "***",
+    },
+  ])(
+    "rejects a malformed or unsafe advertised LUD-09 action",
+    async (successAction) => {
+      const client = new LnurlPayClient(
+        jsonFetcher((url) =>
+          url.pathname.includes("well-known")
+            ? {
+                tag: "payRequest",
+                callback: "https://wallet.example/callback",
+                minSendable: 1_000,
+                maxSendable: 10_000_000,
+                metadata: '[["text/plain","test"]]',
+              }
+            : { pr: "lnbc-test", successAction },
+        ),
+      );
+
+      const discovery = await client.discover("user@wallet.example");
+      await expect(client.requestInvoice(discovery, 1n)).rejects.toMatchObject({
+        code: "INVALID_RESPONSE",
+      });
+    },
+  );
 
   it.each([
     ["omitted", undefined, true],

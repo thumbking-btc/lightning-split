@@ -33,6 +33,51 @@ function currentLivePrice(
   };
 }
 
+export function mergeRestMarketInformation(
+  restInformation: PriceResponseDto,
+  current: PriceResponseDto | undefined,
+  livePriceActive: boolean,
+): PriceResponseDto {
+  if (!livePriceActive || !current) return restInformation;
+  const livePrice = currentLivePrice(current);
+  if (!livePrice) return restInformation;
+  const restObservedAtMs = Date.parse(restInformation.snapshot.observedAt);
+  if (
+    Number.isFinite(restObservedAtMs) &&
+    restObservedAtMs >= livePrice.observedAtMs
+  ) {
+    return restInformation;
+  }
+
+  return withLiveMarketPrice(
+    {
+      ok: true,
+      snapshot: current.snapshot,
+      ...(restInformation.premium ? { premium: restInformation.premium } : {}),
+    },
+    livePrice,
+    Date.parse(current.snapshot.retrievedAt),
+  );
+}
+
+export function completeMarketRefresh(
+  restInformation: PriceResponseDto,
+  current: PriceResponseDto | undefined,
+  livePriceActive: boolean,
+  setInformation: (
+    information: PriceResponseDto,
+    connection: MarketConnectionState,
+  ) => void,
+): PriceResponseDto {
+  const next = mergeRestMarketInformation(
+    restInformation,
+    current,
+    livePriceActive,
+  );
+  setInformation(next, livePriceActive ? "live" : "recent");
+  return next;
+}
+
 export function useMarketInformation(): {
   readonly market: MarketInformationState;
   readonly refreshLockedSnapshot: () => Promise<PriceResponseDto>;
@@ -53,33 +98,15 @@ export function useMarketInformation(): {
     [],
   );
 
-  const mergeRestInformation = useCallback(
-    (restInformation: PriceResponseDto): PriceResponseDto => {
-      const current = informationRef.current;
-      if (!livePriceActiveRef.current || !current) return restInformation;
-      const livePrice = currentLivePrice(current);
-      return livePrice
-        ? withLiveMarketPrice(
-            {
-              ...current,
-              ...(restInformation.premium
-                ? { premium: restInformation.premium }
-                : {}),
-            },
-            livePrice,
-            Date.parse(current.snapshot.retrievedAt),
-          )
-        : restInformation;
-    },
-    [],
-  );
-
   const refreshMarket = useCallback(async () => {
     try {
       const information = await fetchPriceInformation();
-      const next = mergeRestInformation(information);
-      setInformation(next, livePriceActiveRef.current ? "live" : "recent");
-      return information;
+      return completeMarketRefresh(
+        information,
+        informationRef.current,
+        livePriceActiveRef.current,
+        setInformation,
+      );
     } catch (cause) {
       if (!livePriceActiveRef.current) {
         const current = informationRef.current;
@@ -93,7 +120,7 @@ export function useMarketInformation(): {
     } finally {
       lastRestRequestAtRef.current = Date.now();
     }
-  }, [mergeRestInformation, setInformation]);
+  }, [setInformation]);
 
   const refreshLockedSnapshot = useCallback(async () => {
     const information = await refreshMarket();

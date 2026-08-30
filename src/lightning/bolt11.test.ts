@@ -86,6 +86,31 @@ describe("validateBolt11Invoice", () => {
     ).toThrowError(Bolt11InvoiceError);
   });
 
+  it("requires an inline description to equal the expected description", () => {
+    const fixture = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "inline-description-binding",
+      description: "8/30 고깃집 저녁",
+    });
+
+    expect(
+      validateBolt11Invoice(fixture.invoice, {
+        expectedSats: 1_000n,
+        expectedDescription: "8/30 고깃집 저녁",
+        minimumRemainingSeconds: 0,
+        nowSeconds,
+      }).description,
+    ).toBe("8/30 고깃집 저녁");
+    expect(() =>
+      validateBolt11Invoice(fixture.invoice, {
+        expectedSats: 1_000n,
+        expectedDescription: '[["text/plain","provider metadata"]]',
+        minimumRemainingSeconds: 0,
+        nowSeconds,
+      }),
+    ).toThrow(/expected description/u);
+  });
+
   it("accepts a valid long-description invoice above the legacy 1,200-character limit", () => {
     const description = "x".repeat(639);
     const fixture = createTestBolt11({

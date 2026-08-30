@@ -1,6 +1,7 @@
 export type InputMode = "krw" | "sats";
 export type ProviderCommentStatus = "forwarded" | "unsupported" | "partial";
 export type PaymentDescriptionStatus = "embedded" | "notEmbedded" | "partial";
+export type PaymentRequestKind = "bolt11" | "bip321" | "lnurlPay";
 export type InvoiceSlotStatus =
   | "generating"
   | "deferred"
@@ -61,10 +62,21 @@ export interface IssuedInvoice {
   readonly featureBits: readonly number[];
   readonly disposable?: boolean;
   readonly verifyUrl?: string;
+  readonly successAction?: import("../lightning/lnurl").LnurlSuccessAction;
+  readonly nostrVerification?: {
+    readonly relayChannel: string;
+    readonly relayUrl: string;
+    readonly providerPubkey: string;
+    readonly requestJson: string;
+    readonly requestId: string;
+    readonly recipientPubkey: string;
+    readonly lnurl: string;
+  };
   readonly provider: {
     readonly domain: string;
     readonly discoveryUrl: string;
     readonly callbackUrl: string;
+    readonly metadata?: string;
   };
 }
 

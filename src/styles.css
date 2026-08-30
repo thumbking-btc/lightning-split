@@ -496,6 +496,12 @@ button {
 .secondary-button.full {
   width: 100%;
 }
+.invoice-fallback-button {
+  display: block;
+  min-height: 2.75rem;
+  margin: 0.25rem auto 0;
+  font-size: 0.72rem;
+}
 
 .result-header {
   align-items: center;

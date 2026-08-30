@@ -3,7 +3,7 @@ import { openDB } from "idb";
 import { parsePriceSnapshotDto } from "../api/serialization";
 import { createKrwSplitPlan, createSatsSplitPlan } from "../domain/money";
 import { isRecord } from "../infrastructure/validation";
-import type { SettlementSession } from "./types";
+import { MAX_INVOICE_HISTORY, type SettlementSession } from "./types";
 
 const DATABASE_NAME = "lightning-split";
 const STORE_NAME = "settlements";
@@ -47,7 +47,16 @@ function isStoredInvoice(value: unknown): boolean {
       (typeof value.verificationToken === "string" &&
         /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u.test(
           value.verificationToken,
-        )))
+        ))) &&
+    (value.paymentRequest === undefined ||
+      (typeof value.paymentRequest === "string" &&
+        value.paymentRequest.length >= 1 &&
+        value.paymentRequest.length <= 2_300 &&
+        (value.paymentRequest === value.bolt11 ||
+          value.paymentRequest.startsWith("lnurl1") ||
+          value.paymentRequest.startsWith("bitcoin:?lightning=")))) &&
+    (value.awaitingPersistence === undefined ||
+      value.awaitingPersistence === true)
   );
 }
 
@@ -84,7 +93,9 @@ function isStoredSlot(value: unknown): boolean {
     (value.krwShare !== undefined &&
       !isCanonicalPositiveDecimal(value.krwShare)) ||
     !Number.isSafeInteger(value.attempt) ||
-    Number(value.attempt) < 1
+    Number(value.attempt) < 1 ||
+    (value.verificationDelayed !== undefined &&
+      value.verificationDelayed !== true)
   ) {
     return false;
   }
@@ -95,7 +106,8 @@ function isStoredSlot(value: unknown): boolean {
       isRecord(value.failure) &&
       typeof value.failure.code === "string" &&
       typeof value.failure.message === "string" &&
-      typeof value.failure.retryable === "boolean"
+      typeof value.failure.retryable === "boolean" &&
+      (value.invoice === undefined || isStoredInvoice(value.invoice))
     );
   }
   if (
@@ -125,6 +137,22 @@ function isStoredSlot(value: unknown): boolean {
     return false;
   }
   return value.annotation === undefined || isStoredAnnotation(value.annotation);
+}
+
+function isStoredHistoricalInvoiceAttempt(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Number.isSafeInteger(value.slotNumber) &&
+    Number(value.slotNumber) >= 1 &&
+    isCanonicalPositiveDecimal(value.targetSats) &&
+    (value.krwShare === undefined ||
+      isCanonicalPositiveDecimal(value.krwShare)) &&
+    Number.isSafeInteger(value.attempt) &&
+    Number(value.attempt) >= 1 &&
+    isStoredInvoice(value.invoice) &&
+    isIsoTimestamp(value.retiredAt) &&
+    (value.settledAt === undefined || isIsoTimestamp(value.settledAt))
+  );
 }
 
 function isSettlementSession(value: unknown): value is SettlementSession {
@@ -160,6 +188,10 @@ function isSettlementSession(value: unknown): value is SettlementSession {
     (value.providerDomain === undefined ||
       typeof value.providerDomain === "string") &&
     isStoredPaymentHashList(value.issuedPaymentHashes) &&
+    (value.invoiceHistory === undefined ||
+      (Array.isArray(value.invoiceHistory) &&
+        value.invoiceHistory.length <= MAX_INVOICE_HISTORY &&
+        value.invoiceHistory.every(isStoredHistoricalInvoiceAttempt))) &&
     Array.isArray(value.participantNameCandidates) &&
     value.participantNameCandidates.every((name) => typeof name === "string") &&
     Array.isArray(value.slots) &&
@@ -172,18 +204,42 @@ function assertSession(value: unknown): SettlementSession {
   if (!isSettlementSession(value)) {
     throw new Error("저장된 정산 형식이 올바르지 않습니다.");
   }
+  const historicalAttempts = value.invoiceHistory ?? [];
+  const allInvoiceAttempts = [
+    ...value.slots.flatMap((slot) =>
+      slot.invoice
+        ? [
+            {
+              slotNumber: slot.slotNumber,
+              attempt: slot.attempt,
+              invoice: slot.invoice,
+            },
+          ]
+        : [],
+    ),
+    ...historicalAttempts,
+  ];
   if (
     value.slots.some((slot, index) => slot.slotNumber !== index + 1) ||
+    new Set(allInvoiceAttempts.map((attempt) => attempt.invoice.paymentHash))
+      .size !== allInvoiceAttempts.length ||
     new Set(
-      value.slots.flatMap((slot) =>
-        slot.invoice ? [slot.invoice.paymentHash] : [],
+      allInvoiceAttempts.map(
+        (attempt) => `${attempt.slotNumber}:${attempt.attempt}`,
       ),
-    ).size !== value.slots.filter((slot) => slot.invoice).length ||
+    ).size !== allInvoiceAttempts.length ||
+    historicalAttempts.some((attempt) => {
+      const slot = value.slots[attempt.slotNumber - 1];
+      return (
+        !slot ||
+        attempt.targetSats !== slot.targetSats ||
+        attempt.krwShare !== slot.krwShare
+      );
+    }) ||
     (value.issuedPaymentHashes !== undefined &&
-      value.slots.some(
-        (slot) =>
-          slot.invoice !== undefined &&
-          !value.issuedPaymentHashes?.includes(slot.invoice.paymentHash),
+      allInvoiceAttempts.some(
+        (attempt) =>
+          !value.issuedPaymentHashes?.includes(attempt.invoice.paymentHash),
       ))
   ) {
     throw new Error("저장된 정산 식별자가 올바르지 않습니다.");
@@ -295,17 +351,26 @@ export function recoverInterruptedSession(
 ): SettlementSession {
   let changed = false;
   const slots = session.slots.map((slot) => {
-    if (slot.status !== "generating") return slot;
-    changed = true;
-    return {
-      ...slot,
-      status: "failed" as const,
-      failure: {
-        code: "GENERATION_INTERRUPTED",
-        message: "중단된 결제 요청 생성을 다시 시도할 수 있습니다.",
-        retryable: true,
-      },
-    };
+    if (slot.invoice?.awaitingPersistence === true) {
+      changed = true;
+      const { awaitingPersistence: _awaitingPersistence, ...invoice } =
+        slot.invoice;
+      void _awaitingPersistence;
+      return { ...slot, invoice };
+    }
+    if (slot.status === "generating") {
+      changed = true;
+      return {
+        ...slot,
+        status: "failed" as const,
+        failure: {
+          code: "GENERATION_INTERRUPTED",
+          message: "중단된 결제 요청 생성을 다시 시도할 수 있습니다.",
+          retryable: true,
+        },
+      };
+    }
+    return slot;
   });
   return changed ? { ...session, slots } : session;
 }

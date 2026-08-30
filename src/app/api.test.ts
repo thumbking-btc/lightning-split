@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BatchInvoiceRequestDto } from "../api/contracts";
-import { ApiClientError, requestInvoiceBatch } from "./api";
+import { ApiClientError, fetchSettlement, requestInvoiceBatch } from "./api";
 
 const request: BatchInvoiceRequestDto = {
   address: "user@wallet.example",
@@ -113,5 +113,64 @@ describe("invoice API response correlation", () => {
         excludedPaymentHashes: [excluded.invoice.paymentHash],
       }),
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("drops malformed optional payment capabilities but keeps canonical BOLT11 payable", async () => {
+    const slot = pendingSlot(1, "1000", 1);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response([
+          {
+            ...slot,
+            invoice: {
+              ...slot.invoice,
+              verificationToken: "legacy-uuid-or-invalid-token",
+              paymentRequest: "bitcoin:?lightning=another-invoice",
+              disposable: "unknown",
+            },
+          },
+        ]),
+      ),
+    );
+
+    const result = await requestInvoiceBatch({
+      address: request.address,
+      slots: [request.slots[0]!],
+    });
+    expect(result.slots[0]).toMatchObject({
+      status: "pending",
+      invoice: { bolt11: slot.invoice.bolt11 },
+    });
+    if (result.slots[0]?.status !== "pending") throw new Error("pending");
+    expect(result.slots[0].invoice.verificationToken).toBeUndefined();
+    expect(result.slots[0].invoice.paymentRequest).toBeUndefined();
+    expect(result.slots[0].invoice.disposable).toBeUndefined();
+  });
+
+  it("rejects contradictory or malformed settlement state", async () => {
+    const cases = [
+      { ok: true, status: "settled", settled: false },
+      { ok: true, status: "unsettled", settled: true },
+      {
+        ok: true,
+        status: "settled",
+        settled: true,
+        checkedAt: "not-a-date",
+      },
+    ];
+    for (const value of cases) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(value)),
+      );
+      await expect(
+        fetchSettlement({
+          verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+          paymentHash: "11".repeat(32),
+          bolt11: "lnbc1test",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    }
   });
 });

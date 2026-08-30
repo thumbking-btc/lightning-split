@@ -3,18 +3,37 @@ import { useEffect, useState } from "react";
 
 import { buildQrPayload } from "./qr";
 
-export function QrCode({ invoice }: { readonly invoice: string }) {
+export function QrCode({
+  invoice,
+  paymentRequest = invoice,
+}: {
+  readonly invoice: string;
+  readonly paymentRequest?: string;
+}) {
   const [dataUrl, setDataUrl] = useState<string>();
   const [error, setError] = useState<string>();
 
   useEffect(() => {
     let active = true;
-    QRCode.toDataURL(buildQrPayload(invoice), {
-      errorCorrectionLevel: "M",
-      margin: 2,
-      width: 360,
-      color: { dark: "#171612", light: "#ffffff" },
-    })
+    Promise.resolve()
+      .then(() => {
+        try {
+          return buildQrPayload(paymentRequest, invoice);
+        } catch {
+          // Optional richer payment payloads can come from a differently
+          // versioned Worker or restored session. The canonical invoice is the
+          // backwards-compatible payment baseline.
+          return buildQrPayload(invoice, invoice);
+        }
+      })
+      .then((payload) =>
+        QRCode.toDataURL(payload, {
+          errorCorrectionLevel: "M",
+          margin: 2,
+          width: 360,
+          color: { dark: "#171612", light: "#ffffff" },
+        }),
+      )
       .then((url) => {
         if (active) setDataUrl(url);
       })
@@ -24,7 +43,7 @@ export function QrCode({ invoice }: { readonly invoice: string }) {
     return () => {
       active = false;
     };
-  }, [invoice]);
+  }, [invoice, paymentRequest]);
 
   if (error) return <p className="inline-error">{error}</p>;
   if (!dataUrl)

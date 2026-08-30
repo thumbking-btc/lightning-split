@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PriceSnapshotDto } from "./api/serialization";
 import { ApiClientError, requestInvoiceBatch } from "./app/api";
+import { scrollCarouselToIndex } from "./app/carousel";
 import { copyTextToClipboard, readTextFromClipboard } from "./app/clipboard";
 import {
   isLightningInvoiceInput,
@@ -27,9 +28,15 @@ import {
   collectIssuedPaymentHashes,
   createGeneratingSession,
   createSettlementPreview,
+  duplicateSettledSlotNumbers,
+  failPendingInvoicePersistence,
+  firstActionableSlotIndex,
   getSettlementProgress,
   manuallyConfirmSlot,
+  markPendingInvoicesPersisted,
   markExpiredSlots,
+  nextActionableSlotIndex,
+  pendingInvoicePersistenceIdentities,
   prepareQueuedSlot,
   prepareSlotRetry,
   type DraftInput,
@@ -48,6 +55,22 @@ import "./styles.css";
 
 const integerFormatter = new Intl.NumberFormat("ko-KR");
 const formatInteger = (value: bigint) => integerFormatter.format(Number(value));
+
+function requestFailure(
+  cause: unknown,
+  fallbackCode: string,
+  message: string,
+): {
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+} {
+  return {
+    code: cause instanceof ApiClientError ? cause.code : fallbackCode,
+    message,
+    retryable: cause instanceof ApiClientError ? cause.retryable : true,
+  };
+}
 
 function formatPriceTime(snapshot: PriceSnapshotDto): string {
   const seconds = Math.max(
@@ -101,6 +124,8 @@ function slotStatus(slot: ClientSlot): { label: string; tone: string } {
     return { label: "사용자 확인", tone: "manual" };
   if (slot.status === "expired") return { label: "만료", tone: "muted" };
   if (slot.status === "failed") return { label: "생성 실패", tone: "error" };
+  if (slot.invoice?.awaitingPersistence === true)
+    return { label: "결제 요청 저장 중", tone: "working" };
   return slot.invoice?.verificationToken
     ? { label: "결제 대기 · 자동 확인 중", tone: "waiting" }
     : { label: "결제 대기 · 사용자 확인 필요", tone: "waiting" };
@@ -137,11 +162,20 @@ export function InvoiceCard({
 }) {
   const status = slotStatus(slot);
   const [copyFeedback, setCopyFeedback] = useState<string>();
+  const [showRichPaymentRequest, setShowRichPaymentRequest] = useState(false);
   const completed =
     slot.status === "settled" || slot.status === "manuallyConfirmed";
+  const hasRichPaymentRequest =
+    slot.invoice?.paymentRequest !== undefined &&
+    slot.invoice.paymentRequest !== slot.invoice.bolt11;
+  const displayedPaymentRequest =
+    slot.invoice && hasRichPaymentRequest && showRichPaymentRequest
+      ? slot.invoice.paymentRequest
+      : slot.invoice?.bolt11;
+
   const copyInvoice = async () => {
-    if (!slot.invoice) return;
-    const copied = await copyTextToClipboard(slot.invoice.bolt11);
+    if (!displayedPaymentRequest) return;
+    const copied = await copyTextToClipboard(displayedPaymentRequest);
     setCopyFeedback(
       copied
         ? "결제 요청을 복사했습니다."
@@ -178,11 +212,17 @@ export function InvoiceCard({
       )}
 
       {slot.invoice &&
-        slot.status !== "expired" &&
-        slot.status !== "verifyingExpired" && (
+        slot.status === "pending" &&
+        slot.invoice.awaitingPersistence !== true && (
           <>
             <div className="qr-shell">
-              <QrCode invoice={slot.invoice.bolt11} />
+              <QrCode
+                key={displayedPaymentRequest}
+                invoice={slot.invoice.bolt11}
+                {...(displayedPaymentRequest === undefined
+                  ? {}
+                  : { paymentRequest: displayedPaymentRequest })}
+              />
             </div>
             <button
               className="secondary-button full"
@@ -191,11 +231,35 @@ export function InvoiceCard({
             >
               결제 요청 복사
             </button>
+            {hasRichPaymentRequest && (
+              <button
+                className="text-button invoice-fallback-button"
+                type="button"
+                aria-pressed={showRichPaymentRequest}
+                onClick={() => {
+                  setShowRichPaymentRequest((current) => !current);
+                  setCopyFeedback(undefined);
+                }}
+              >
+                {showRichPaymentRequest
+                  ? "기본 BOLT11 QR 보기"
+                  : "메모 포함 결제 QR 보기"}
+              </button>
+            )}
             <div className="copy-feedback" aria-live="polite">
               {copyFeedback}
             </div>
             {slot.status === "pending" && (
               <ExpiryCountdown expiresAt={slot.invoice.expiresAt} />
+            )}
+            {slot.invoice.verificationToken && !slot.verificationDelayed && (
+              <button
+                className="text-button invoice-fallback-button"
+                type="button"
+                onClick={() => onManualConfirm(slot.slotNumber)}
+              >
+                직접 확인 후 완료로 표시
+              </button>
             )}
           </>
         )}
@@ -210,30 +274,57 @@ export function InvoiceCard({
           앞 결제 요청이 끝나면 이 결제만 새로 발급합니다.
         </div>
       )}
+      {slot.status === "pending" &&
+        slot.invoice?.awaitingPersistence === true && (
+          <div className="loading-panel" aria-live="polite">
+            결제 요청을 기기에 안전하게 저장하고 있습니다.
+          </div>
+        )}
       {slot.status === "verifyingExpired" && (
         <div className="loading-panel" aria-live="polite">
-          만료 직전 결제가 있었는지 최종 확인하고 있습니다.
+          <span>만료 직전 결제가 있었는지 최종 확인하고 있습니다.</span>
+          {slot.invoice && (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => onManualConfirm(slot.slotNumber)}
+            >
+              결제 완료로 표시
+            </button>
+          )}
         </div>
       )}
       {slot.status === "failed" && (
         <div className="error-panel" role="alert">
-          <strong>결제 요청을 만들지 못했습니다.</strong>
-          <span>다른 결제의 성공 결과는 그대로 유지됩니다.</span>
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={retrying}
-            onClick={() => onRetry(slot.slotNumber)}
-          >
-            {retrying ? "다시 만드는 중…" : "이 결제만 다시 만들기"}
-          </button>
+          <strong>
+            {slot.failure?.code === "INVOICE_PERSISTENCE_FAILED"
+              ? "결제 요청을 안전하게 저장하지 못했습니다."
+              : "결제 요청을 만들지 못했습니다."}
+          </strong>
+          <span>
+            {slot.failure?.code === "INVOICE_PERSISTENCE_FAILED"
+              ? "표시하지 않은 결제 요청의 식별정보는 현재 화면에 유지됩니다."
+              : slot.failure?.code === "PAYER_DATA_REQUIRED"
+                ? "이 주소는 invoice 발급에 필수 송금자 정보를 요구하여 현재 입력만으로는 만들 수 없습니다."
+                : "다른 결제의 성공 결과는 그대로 유지됩니다."}
+          </span>
+          {slot.failure?.retryable !== false && (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={retrying}
+              onClick={() => onRetry(slot.slotNumber)}
+            >
+              {retrying ? "다시 만드는 중…" : "이 결제만 다시 만들기"}
+            </button>
+          )}
         </div>
       )}
       {slot.status === "expired" && (
         <div className="expired-panel">
           <strong>이 QR은 만료되었습니다.</strong>
           <span>다른 결제는 유지하고 이 결제만 새로 만들 수 있습니다.</span>
-          {slot.invoice && !slot.invoice.verificationToken && (
+          {slot.invoice && (
             <button
               className="secondary-button"
               type="button"
@@ -254,9 +345,12 @@ export function InvoiceCard({
       )}
       {slot.status === "pending" &&
         slot.invoice &&
-        !slot.invoice.verificationToken && (
+        slot.invoice.awaitingPersistence !== true &&
+        (!slot.invoice.verificationToken || slot.verificationDelayed) && (
           <div className="manual-panel">
-            <strong>자동 결제 확인을 사용할 수 없습니다.</strong>
+            {!slot.invoice.verificationToken && (
+              <strong>자동 결제 확인을 사용할 수 없습니다.</strong>
+            )}
             <span>실제 입금을 직접 확인한 뒤에만 표시하십시오.</span>
             <button
               className="secondary-button"
@@ -546,7 +640,13 @@ export function App() {
   const [persistenceError, setPersistenceError] = useState<string>();
   const [restoring, setRestoring] = useState(true);
   const [activeSlotIndex, setActiveSlotIndex] = useState(0);
+  const activeSlotIndexRef = useRef(0);
+  const restoredCarouselIndexRef = useRef<number | undefined>(undefined);
   const carouselRef = useRef<HTMLElement>(null);
+  const previousCarouselSessionRef = useRef<{
+    readonly id: string;
+    readonly statuses: readonly ClientSlot["status"][];
+  } | null>(null);
   const sessionEpochRef = useRef(0);
   const retryOperationRef = useRef<string | undefined>(undefined);
   const priceInformation = market.information;
@@ -570,8 +670,12 @@ export function App() {
     void loadActiveSession()
       .then((stored) => {
         if (stored && sessionEpochRef.current === restoreEpoch) {
-          setActiveSlotIndex(0);
-          setSession(markExpiredSlots(recoverInterruptedSession(stored)));
+          const recovered = markExpiredSlots(recoverInterruptedSession(stored));
+          const restoredIndex = firstActionableSlotIndex(recovered);
+          activeSlotIndexRef.current = restoredIndex;
+          restoredCarouselIndexRef.current = restoredIndex;
+          setActiveSlotIndex(restoredIndex);
+          setSession(recovered);
         }
       })
       .catch(() =>
@@ -584,14 +688,25 @@ export function App() {
 
   useEffect(() => {
     if (!session) return;
+    const pendingPersistence = pendingInvoicePersistenceIdentities(session);
     void saveActiveSession(session)
-      .then(() => setPersistenceError(undefined))
-      .catch(() =>
+      .then(() => {
+        setPersistenceError(undefined);
+        if (pendingPersistence.length > 0)
+          updateSession((current) =>
+            markPendingInvoicesPersisted(current, pendingPersistence),
+          );
+      })
+      .catch(() => {
         setPersistenceError(
           "정산을 기기에 저장하지 못했습니다. 화면을 닫으면 복구되지 않을 수 있습니다.",
-        ),
-      );
-  }, [session]);
+        );
+        if (pendingPersistence.length > 0)
+          updateSession((current) =>
+            failPendingInvoicePersistence(current, pendingPersistence),
+          );
+      });
+  }, [session, updateSession]);
 
   const draft: DraftInput = useMemo(
     () => ({
@@ -652,6 +767,8 @@ export function App() {
         lockedSnapshot,
       );
       if (sessionEpochRef.current !== operationEpoch) return;
+      activeSlotIndexRef.current = 0;
+      restoredCarouselIndexRef.current = undefined;
       setActiveSlotIndex(0);
       setSession(generating);
       const response = await requestInvoiceBatch({
@@ -695,11 +812,7 @@ export function App() {
                     ? {
                         ...slot,
                         status: "failed" as const,
-                        failure: {
-                          code: "BATCH_FAILED",
-                          message,
-                          retryable: true,
-                        },
+                        failure: requestFailure(cause, "BATCH_FAILED", message),
                       }
                     : slot,
                 ),
@@ -780,11 +893,7 @@ export function App() {
                   ? {
                       ...slot,
                       status: "failed" as const,
-                      failure: {
-                        code: "RETRY_FAILED",
-                        message,
-                        retryable: true,
-                      },
+                      failure: requestFailure(cause, "RETRY_FAILED", message),
                     }
                   : slot,
               ),
@@ -868,11 +977,7 @@ export function App() {
                     ? {
                         ...slot,
                         status: "failed" as const,
-                        failure: {
-                          code: "QUEUE_FAILED",
-                          message,
-                          retryable: true,
-                        },
+                        failure: requestFailure(cause, "QUEUE_FAILED", message),
                       }
                     : slot,
                 ),
@@ -914,6 +1019,8 @@ export function App() {
     retryOperationRef.current = undefined;
     setBusy(false);
     setRetryingSlot(undefined);
+    activeSlotIndexRef.current = 0;
+    restoredCarouselIndexRef.current = undefined;
     setActiveSlotIndex(0);
     setSession(null);
     setError(undefined);
@@ -980,14 +1087,9 @@ export function App() {
   const moveCarousel = (nextIndex: number) => {
     if (!session) return;
     const index = Math.min(Math.max(nextIndex, 0), session.slots.length - 1);
+    activeSlotIndexRef.current = index;
     setActiveSlotIndex(index);
-    const card = carouselRef.current?.children.item(index);
-    if (card instanceof HTMLElement)
-      card.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
+    scrollCarouselToIndex(carouselRef.current, index, "smooth");
   };
 
   const trackCarouselPosition = () => {
@@ -1006,8 +1108,57 @@ export function App() {
         closestIndex = index;
       }
     });
+    activeSlotIndexRef.current = closestIndex;
     setActiveSlotIndex(closestIndex);
   };
+
+  useEffect(() => {
+    if (!session || restoredCarouselIndexRef.current === undefined) return;
+    if (
+      scrollCarouselToIndex(
+        carouselRef.current,
+        restoredCarouselIndexRef.current,
+        "auto",
+      )
+    ) {
+      restoredCarouselIndexRef.current = undefined;
+    }
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) {
+      previousCarouselSessionRef.current = null;
+      return;
+    }
+    const previous = previousCarouselSessionRef.current;
+    previousCarouselSessionRef.current = {
+      id: session.id,
+      statuses: session.slots.map((slot) => slot.status),
+    };
+    if (!previous || previous.id !== session.id) return;
+
+    const previousStatus = previous.statuses[activeSlotIndex];
+    const currentStatus = session.slots[activeSlotIndex]?.status;
+    const wasCompleted =
+      previousStatus === "settled" || previousStatus === "manuallyConfirmed";
+    const isCompleted =
+      currentStatus === "settled" || currentStatus === "manuallyConfirmed";
+    if (wasCompleted || !isCompleted) return;
+
+    const nextIndex = nextActionableSlotIndex(session, activeSlotIndex);
+    if (nextIndex === undefined) return;
+    const operationEpoch = sessionEpochRef.current;
+    window.setTimeout(() => {
+      if (
+        sessionEpochRef.current !== operationEpoch ||
+        activeSlotIndexRef.current !== activeSlotIndex
+      )
+        return;
+      activeSlotIndexRef.current = nextIndex;
+      setActiveSlotIndex(nextIndex);
+      scrollCarouselToIndex(carouselRef.current, nextIndex, "smooth");
+    }, 0);
+  }, [activeSlotIndex, session]);
 
   if (restoring)
     return (
@@ -1018,6 +1169,7 @@ export function App() {
 
   if (session) {
     const progress = getSettlementProgress(session);
+    const duplicateSettledSlots = duplicateSettledSlotNumbers(session);
     const progressPercent =
       progress.totalCount === 0
         ? 0
@@ -1119,6 +1271,12 @@ export function App() {
         {error && (
           <div className="global-error" role="alert">
             {error}
+          </div>
+        )}
+        {duplicateSettledSlots.length > 0 && (
+          <div className="global-error" role="alert">
+            {duplicateSettledSlots.join(", ")}번 결제에서 서로 다른 invoice의
+            중복 입금이 확인되었습니다. 수취 지갑의 거래내역을 확인하십시오.
           </div>
         )}
         <nav className="carousel-controls" aria-label="결제 QR 이동">

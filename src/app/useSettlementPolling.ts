@@ -2,13 +2,17 @@ import { useEffect, useRef } from "react";
 
 import { ApiClientError, fetchSettlement } from "./api";
 import {
-  isSlotPollable,
   nextPollingDelay,
   settlementIdentityKey,
-  settlementInvoiceIdentity,
+  settlementPollingTargets,
+  shouldMarkVerificationDelayed,
   transitionAfterSettlementCheck,
 } from "./polling";
-import { disableAutomaticVerification, markExpiredSlots } from "./session";
+import {
+  disableAutomaticVerification,
+  markAutomaticVerificationDelayed,
+  markExpiredSlots,
+} from "./session";
 import type { SettlementSession } from "./types";
 
 export function useSettlementPolling(
@@ -46,17 +50,16 @@ export function useSettlementPolling(
         return;
       }
 
-      const due = current.slots.flatMap((slot) => {
-        if (!isSlotPollable(slot, now)) return [];
-        const identity = settlementInvoiceIdentity(slot);
-        if (!identity) return [];
-        const key = settlementIdentityKey(identity);
-        return (nextDue.get(key) ?? 0) <= now ? [{ slot, identity, key }] : [];
-      });
+      const due = settlementPollingTargets(current, now).flatMap(
+        ({ invoice, identity }) => {
+          const key = settlementIdentityKey(identity);
+          return (nextDue.get(key) ?? 0) <= now
+            ? [{ invoice, identity, key }]
+            : [];
+        },
+      );
       await Promise.all(
-        due.map(async ({ slot, identity, key }) => {
-          const invoice = slot.invoice;
-          if (!invoice) return;
+        due.map(async ({ invoice, identity, key }) => {
           try {
             const response = await fetchSettlement({
               verificationToken: identity.verificationToken,
@@ -78,7 +81,7 @@ export function useSettlementPolling(
             if (cancelled) return;
             const failureCount = (failures.get(key) ?? 0) + 1;
             const permanentFailure =
-              cause instanceof ApiClientError && !cause.retryable;
+              cause instanceof ApiClientError && cause.code === "INVALID_INPUT";
             if (permanentFailure) {
               failures.delete(key);
               nextDue.delete(key);
@@ -88,6 +91,11 @@ export function useSettlementPolling(
               return;
             }
             failures.set(key, failureCount);
+            if (shouldMarkVerificationDelayed(failureCount)) {
+              updateSession((value) =>
+                markAutomaticVerificationDelayed(value, identity),
+              );
+            }
             const retryAfterSeconds =
               cause instanceof ApiClientError &&
               cause.retryAfterSeconds !== undefined

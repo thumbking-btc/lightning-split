@@ -8,6 +8,7 @@ import {
   parseProviderInteger,
   sanitizeProviderReason,
 } from "../infrastructure/validation";
+import { isValidNostrPublicKey } from "../nostr/event";
 import { MAX_BOLT11_LENGTH } from "./bolt11";
 
 const USERNAME_PATTERN = /^[a-z0-9._+-]{1,64}$/u;
@@ -41,10 +42,133 @@ export interface LnurlInvoiceResponse {
   readonly disposable: boolean;
   readonly commentSent: boolean;
   readonly verifyUrl?: string;
+  readonly successAction?: LnurlSuccessAction;
 }
+
+export type LnurlSuccessAction =
+  | { readonly tag: "message"; readonly message: string }
+  | {
+      readonly tag: "url";
+      readonly description: string;
+      readonly url: string;
+    }
+  | {
+      readonly tag: "aes";
+      readonly description: string;
+      readonly ciphertext: string;
+      readonly iv: string;
+    };
 
 export interface InvoiceRequestOptions {
   readonly comment?: string;
+  readonly nostr?: {
+    /** Exact, signed NIP-57 kind 9734 JSON. */
+    readonly requestJson: string;
+    /** Bech32 LNURL value committed to by the zap request. */
+    readonly lnurl: string;
+  };
+}
+
+function hasAtMostCharacters(value: string, maximum: number): boolean {
+  return [...value].length <= maximum;
+}
+
+function decodeStrictBase64(value: string): Uint8Array | undefined {
+  const compact = value.replace(/\s/gu, "");
+  if (
+    compact.length === 0 ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)
+  ) {
+    return undefined;
+  }
+  try {
+    const binary = atob(compact);
+    if (btoa(binary) !== compact) return undefined;
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSuccessAction(
+  value: unknown,
+  callbackUrl: URL,
+): LnurlSuccessAction | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.tag !== "string") {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "The LNURL provider returned an invalid success action.",
+    );
+  }
+  if (
+    value.tag === "message" &&
+    typeof value.message === "string" &&
+    value.message.length > 0 &&
+    hasAtMostCharacters(value.message, 144)
+  ) {
+    return Object.freeze({ tag: "message", message: value.message });
+  }
+  if (
+    value.tag === "url" &&
+    typeof value.description === "string" &&
+    value.description.length > 0 &&
+    hasAtMostCharacters(value.description, 144) &&
+    typeof value.url === "string"
+  ) {
+    try {
+      const url = safeHttpsUrl(value.url);
+      if (url.hostname !== callbackUrl.hostname) throw new Error("origin");
+      return Object.freeze({
+        tag: "url",
+        description: value.description,
+        url: url.toString(),
+      });
+    } catch {
+      throw new InfrastructureError(
+        "INVALID_RESPONSE",
+        "The LNURL provider returned an unsafe success action URL.",
+      );
+    }
+  }
+  if (
+    value.tag === "aes" &&
+    typeof value.description === "string" &&
+    value.description.length > 0 &&
+    hasAtMostCharacters(value.description, 144) &&
+    typeof value.ciphertext === "string" &&
+    value.ciphertext.length > 0 &&
+    value.ciphertext.length <= 4_096 &&
+    typeof value.iv === "string" &&
+    value.iv.length === 24
+  ) {
+    const ciphertext = decodeStrictBase64(value.ciphertext);
+    const iv = decodeStrictBase64(value.iv);
+    if (
+      ciphertext === undefined ||
+      ciphertext.length === 0 ||
+      ciphertext.length % 16 !== 0 ||
+      iv?.length !== 16
+    ) {
+      throw new InfrastructureError(
+        "INVALID_RESPONSE",
+        "The LNURL provider returned an invalid encrypted success action.",
+      );
+    }
+    return Object.freeze({
+      tag: "aes",
+      description: value.description,
+      ciphertext: value.ciphertext,
+      iv: value.iv,
+    });
+  }
+  // LUD-09 requires a payer that does not understand the advertised action to
+  // abort rather than silently pay without the provider's post-payment flow.
+  throw new InfrastructureError(
+    "INVALID_RESPONSE",
+    "The LNURL provider returned an invalid or unsupported success action.",
+  );
 }
 
 export function normalizeLightningAddress(
@@ -231,7 +355,7 @@ export class LnurlPayClient {
     const nostrPubkey =
       value.allowsNostr === true &&
       typeof value.nostrPubkey === "string" &&
-      /^[0-9a-f]{64}$/iu.test(value.nostrPubkey)
+      isValidNostrPublicKey(value.nostrPubkey.toLowerCase())
         ? value.nostrPubkey.toLowerCase()
         : undefined;
     const allowsNostr = nostrPubkey !== undefined;
@@ -289,6 +413,27 @@ export class LnurlPayClient {
       }
       callback.searchParams.set("comment", options.comment);
     }
+    if (options.nostr !== undefined) {
+      if (!discovery.allowsNostr || discovery.nostrPubkey === undefined) {
+        throw new InfrastructureError(
+          "INVALID_INPUT",
+          "The provider did not advertise NIP-57 invoice support.",
+        );
+      }
+      if (
+        options.nostr.requestJson.length < 1 ||
+        options.nostr.requestJson.length > 65_536 ||
+        options.nostr.lnurl.length < 1 ||
+        options.nostr.lnurl.length > 5_000
+      ) {
+        throw new InfrastructureError(
+          "INVALID_INPUT",
+          "The NIP-57 invoice request is invalid.",
+        );
+      }
+      callback.searchParams.set("nostr", options.nostr.requestJson);
+      callback.searchParams.set("lnurl", options.nostr.lnurl);
+    }
     const { value } = await fetchBoundedJson(
       callback,
       this.policy.callbackHttp,
@@ -326,11 +471,13 @@ export class LnurlPayClient {
         // LUD-21 is optional. Invalid verify data falls back to manual checks.
       }
     }
+    const successAction = parseSuccessAction(value.successAction, callback);
     return Object.freeze({
       invoice: value.pr,
       disposable: value.disposable === false ? false : true,
       commentSent: options.comment !== undefined,
       ...(verifyUrl === undefined ? {} : { verifyUrl }),
+      ...(successAction === undefined ? {} : { successAction }),
     });
   }
 }

@@ -1,8 +1,15 @@
 import { env } from "cloudflare:workers";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_LIGHTNING_POLICY } from "../src/config/policies";
+import { buildPaymentPayload } from "../src/app/paymentUri";
+import { signNostrEvent } from "../src/nostr/event";
+import {
+  decodeLnurlPayUrl,
+  parseAndValidateZapRequest,
+} from "../src/nostr/zap";
 import { createTestBolt11 } from "../src/test/bolt11-fixture";
 import worker, { handleApiRequest } from "./index";
 import { network } from "./test/network";
@@ -16,8 +23,13 @@ const TEST_SECRET = "11".repeat(32);
 const TEST_ENV = {
   INVOICE_RATE_LIMITER: env.INVOICE_RATE_LIMITER,
   SETTLEMENT_RATE_LIMITER: env.SETTLEMENT_RATE_LIMITER,
+  NIP57_RECEIPTS: env.NIP57_RECEIPTS,
   VERIFICATION_TOKEN_SECRET: TEST_SECRET,
 };
+
+function bytesToHex(value: Uint8Array): string {
+  return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function apiRequest(
   path: string,
@@ -585,8 +597,7 @@ describe("Lightning Split Worker API", () => {
     vi.setSystemTime(
       now +
         1_001 +
-        DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds *
-          1_000,
+        DEFAULT_LIGHTNING_POLICY.settlementHistoricalRetentionSeconds * 1_000,
     );
     const result = await callWorker(
       apiRequest("/api/settlement", {
@@ -770,6 +781,385 @@ describe("Lightning Split Worker API", () => {
     });
     expect(body.slots[0]?.invoice.verificationToken).toBeUndefined();
   });
+
+  it("serves a payer-direct LNURL envelope with exact metadata and a LUD-09 transaction note", async () => {
+    const metadata = '[["text/plain","Pay to test user"]]';
+    let invoice = "";
+    network.use(
+      http.get(DISCOVERY_URL, () =>
+        HttpResponse.json({
+          tag: "payRequest",
+          callback: CALLBACK_URL,
+          minSendable: 1_000,
+          maxSendable: 100_000_000,
+          metadata,
+          commentAllowed: 255,
+        }),
+      ),
+      http.get(CALLBACK_URL, ({ request }) => {
+        expect(new URL(request.url).searchParams.get("comment")).toBe(
+          "8/30 고깃집 저녁",
+        );
+        invoice = createTestBolt11({
+          amountSats: 1_000n,
+          fixtureId: "worker-payer-lnurl-envelope",
+          timestamp: Math.floor(Date.now() / 1_000),
+          descriptionHashSource: metadata,
+        }).invoice;
+        return HttpResponse.json({ pr: invoice, routes: [] });
+      }),
+    );
+
+    const batch = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "8/30 고깃집 저녁",
+      }),
+    );
+    const batchBody = (await batch.response.json()) as {
+      slots: [{ invoice: { paymentRequest: string; bolt11: string } }];
+    };
+    const payUrl = decodeLnurlPayUrl(batchBody.slots[0].invoice.paymentRequest);
+    expect(payUrl).toMatch(/^https:\/\/app\.example\/api\/pay\/[0-9a-f]{64}$/u);
+
+    const discovery = await worker.fetch(
+      new IncomingRequest(payUrl, { headers: { Accept: "application/json" } }),
+      TEST_ENV,
+    );
+    const discoveryBody = (await discovery.json()) as {
+      callback: string;
+      metadata: string;
+      minSendable: number;
+      maxSendable: number;
+    };
+    expect(discoveryBody).toMatchObject({
+      metadata,
+      minSendable: 1_000_000,
+      maxSendable: 1_000_000,
+    });
+
+    const callback = await worker.fetch(
+      new IncomingRequest(`${discoveryBody.callback}?amount=1000000`, {
+        headers: { Accept: "application/json" },
+      }),
+      TEST_ENV,
+    );
+    await expect(callback.json()).resolves.toEqual({
+      pr: invoice,
+      routes: [],
+      disposable: true,
+      successAction: { tag: "message", message: "8/30 고깃집 저녁" },
+    });
+  });
+
+  it("preserves a downstream LUD-09 URL action through the payer-direct wrapper", async () => {
+    const metadata = '[["text/plain","Pay to test user"]]';
+    const downstreamActionUrl = "https://wallet.example/receipt/order-1";
+    network.use(
+      http.get(DISCOVERY_URL, () =>
+        HttpResponse.json({
+          tag: "payRequest",
+          callback: CALLBACK_URL,
+          minSendable: 1_000,
+          maxSendable: 100_000_000,
+          metadata,
+          commentAllowed: 255,
+        }),
+      ),
+      http.get(CALLBACK_URL, () =>
+        HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats: 1_000n,
+            fixtureId: "worker-payer-lnurl-action",
+            timestamp: Math.floor(Date.now() / 1_000),
+            descriptionHashSource: metadata,
+          }).invoice,
+          routes: [],
+          successAction: {
+            tag: "url",
+            description: "영수증 열기",
+            url: downstreamActionUrl,
+          },
+        }),
+      ),
+    );
+
+    const batch = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "8/30 고깃집 저녁",
+      }),
+    );
+    const batchBody = (await batch.response.json()) as {
+      slots: [{ invoice: { paymentRequest: string } }];
+    };
+    const payUrl = decodeLnurlPayUrl(batchBody.slots[0].invoice.paymentRequest);
+    const discovery = await worker.fetch(new IncomingRequest(payUrl), TEST_ENV);
+    const discoveryBody = (await discovery.json()) as { callback: string };
+    const callback = await worker.fetch(
+      new IncomingRequest(`${discoveryBody.callback}?amount=1000000`),
+      TEST_ENV,
+    );
+    const callbackBody = (await callback.json()) as {
+      successAction: { tag: string; description: string; url: string };
+    };
+    expect(callbackBody.successAction).toMatchObject({
+      tag: "url",
+      description: "영수증 열기",
+    });
+    expect(callbackBody.successAction.url).toMatch(
+      /^https:\/\/app\.example\/api\/pay\/[0-9a-f]{64}\/action$/u,
+    );
+
+    const action = await worker.fetch(
+      new IncomingRequest(callbackBody.successAction.url),
+      TEST_ENV,
+    );
+    expect(action.status).toBe(302);
+    expect(action.headers.get("location")).toBe(downstreamActionUrl);
+    expect(action.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("does not wrap an inline-description invoice as metadata-bound LNURL", async () => {
+    const metadata = '[["text/plain","Pay to test user"]]';
+    network.use(
+      http.get(DISCOVERY_URL, () =>
+        HttpResponse.json({
+          tag: "payRequest",
+          callback: CALLBACK_URL,
+          minSendable: 1_000,
+          maxSendable: 100_000_000,
+          metadata,
+          commentAllowed: 255,
+        }),
+      ),
+      http.get(CALLBACK_URL, () =>
+        HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats: 1_000n,
+            fixtureId: "worker-inline-description-not-lnurl",
+            timestamp: Math.floor(Date.now() / 1_000),
+            description: "8/30 고깃집 저녁",
+          }).invoice,
+          routes: [],
+        }),
+      ),
+    );
+
+    const batch = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "8/30 고깃집 저녁",
+      }),
+    );
+    const body = (await batch.response.json()) as {
+      slots: [{ invoice: { bolt11: string; paymentRequest: string } }];
+    };
+    expect(body.slots[0].invoice.paymentRequest).toBe(
+      buildPaymentPayload(body.slots[0].invoice.bolt11, "8/30 고깃집 저녁"),
+    );
+  });
+
+  it.each([false, true])(
+    "uses advertised NIP-57 receipts without a Lightning node (failing LUD-21: %s)",
+    async (withFailingLud21) => {
+      const providerSecret = Uint8Array.from({ length: 32 }, (_, index) =>
+        index === 31 ? 7 : 0,
+      );
+      const providerPubkey = bytesToHex(schnorr.getPublicKey(providerSecret));
+      const requests: ReturnType<typeof parseAndValidateZapRequest>[] = [];
+      const invoices: string[] = [];
+      const comments: (string | null)[] = [];
+      network.use(
+        http.get(DISCOVERY_URL, () =>
+          HttpResponse.json({
+            tag: "payRequest",
+            callback: CALLBACK_URL,
+            minSendable: 1_000,
+            maxSendable: 100_000_000,
+            metadata: '[["text/plain","Pay to test user"]]',
+            commentAllowed: 255,
+            allowsNostr: true,
+            nostrPubkey: providerPubkey,
+          }),
+        ),
+        http.get(CALLBACK_URL, ({ request }) => {
+          const url = new URL(request.url);
+          const requestJson = url.searchParams.get("nostr");
+          const lnurl = url.searchParams.get("lnurl");
+          if (!requestJson || !lnurl) {
+            return HttpResponse.json(
+              { status: "ERROR", reason: "zap request required" },
+              { status: 422 },
+            );
+          }
+          const parsed = parseAndValidateZapRequest(requestJson, {
+            expectedLnurl: lnurl,
+            expectedProviderPubkey: providerPubkey,
+          });
+          requests.push(parsed);
+          comments.push(url.searchParams.get("comment"));
+          const invoice = createTestBolt11({
+            amountSats: parsed.amountMsat / 1_000n,
+            fixtureId: `worker-nip57-${requests.length}`,
+            timestamp: Math.floor(Date.now() / 1_000),
+            descriptionHashSource: parsed.json,
+          }).invoice;
+          invoices.push(invoice);
+          return HttpResponse.json({
+            pr: invoice,
+            routes: [],
+            ...(withFailingLud21
+              ? { verify: "https://wallet.example/verify/nip57" }
+              : {}),
+          });
+        }),
+        http.get("https://wallet.example/verify/nip57", () =>
+          HttpResponse.json({}, { status: 503 }),
+        ),
+      );
+
+      const batch = await callWorker(
+        apiRequest("/api/invoices", {
+          address: "user@wallet.example",
+          slots: [1, 2].map((slotNumber) => ({
+            slotNumber,
+            targetSats: "92",
+            attempt: 1,
+          })),
+          providerComment: "8/30 고깃집 저녁",
+        }),
+      );
+      const body = (await batch.response.json()) as {
+        provider: { automaticSettlementAvailable: boolean };
+        slots: {
+          invoice: {
+            bolt11: string;
+            paymentHash: string;
+            paymentRequest: string;
+            verificationToken: string;
+          };
+        }[];
+      };
+      expect(body.provider.automaticSettlementAvailable).toBe(true);
+      expect(body.slots).toHaveLength(2);
+      expect(new Set(body.slots.map((slot) => slot.invoice.bolt11)).size).toBe(
+        2,
+      );
+      expect(
+        new Set(body.slots.map((slot) => slot.invoice.paymentHash)).size,
+      ).toBe(2);
+      expect(
+        body.slots.every((slot) =>
+          slot.invoice.paymentRequest.startsWith("bitcoin:?lightning="),
+        ),
+      ).toBe(true);
+      expect(comments).toEqual(["8/30 고깃집 저녁", "8/30 고깃집 저녁"]);
+      expect(
+        requests.every(
+          (request) => request.event.pubkey !== request.recipientPubkey,
+        ),
+      ).toBe(true);
+
+      const first = body.slots[0]!;
+      const unsettled = await callWorker(
+        apiRequest("/api/settlement", {
+          verificationToken: first.invoice.verificationToken,
+          paymentHash: first.invoice.paymentHash,
+          bolt11: first.invoice.bolt11,
+        }),
+      );
+      await expect(unsettled.response.json()).resolves.toMatchObject({
+        status: "unsettled",
+        settled: false,
+        providerStatus: "NIP57_RECEIPT_PENDING",
+      });
+
+      const zapRequest = requests[0]!;
+      const relayUrl = new URL(zapRequest.relays[0]!);
+      const channel = relayUrl.pathname.split("/").at(-1)!;
+      const receipt = signNostrEvent(
+        {
+          created_at: Math.floor(Date.now() / 1_000),
+          kind: 9_735,
+          tags: [
+            ["p", zapRequest.recipientPubkey],
+            ["P", zapRequest.event.pubkey],
+            ["bolt11", invoices[0]!],
+            ["description", zapRequest.json],
+          ],
+          content: "",
+        },
+        providerSecret,
+      );
+      const relay = TEST_ENV.NIP57_RECEIPTS.getByName(channel);
+      const upgraded = await relay.fetch("https://relay.example/channel", {
+        headers: { Upgrade: "websocket" },
+      });
+      const socket = upgraded.webSocket!;
+      socket.accept();
+      const forgedReceipt = signNostrEvent(
+        {
+          created_at: Math.floor(Date.now() / 1_000),
+          kind: 9_735,
+          tags: [
+            ["p", zapRequest.recipientPubkey],
+            ["P", zapRequest.event.pubkey],
+            ["bolt11", invoices[0]!],
+            ["description", zapRequest.json],
+          ],
+          content: "",
+        },
+        Uint8Array.from({ length: 32 }, (_, index) => (index === 31 ? 9 : 0)),
+      );
+      const forgedAcknowledgement = new Promise<unknown>((resolve) => {
+        socket.addEventListener(
+          "message",
+          (event) => resolve(JSON.parse(String(event.data)) as unknown),
+          { once: true },
+        );
+      });
+      socket.send(JSON.stringify(["EVENT", forgedReceipt]));
+      await expect(forgedAcknowledgement).resolves.toEqual([
+        "OK",
+        forgedReceipt.id,
+        false,
+        "invalid: receipt does not match this payment",
+      ]);
+
+      const acknowledgement = new Promise<unknown>((resolve) => {
+        socket.addEventListener(
+          "message",
+          (event) => resolve(JSON.parse(String(event.data)) as unknown),
+          { once: true },
+        );
+      });
+      socket.send(JSON.stringify(["EVENT", receipt]));
+      await expect(acknowledgement).resolves.toEqual([
+        "OK",
+        receipt.id,
+        true,
+        "",
+      ]);
+
+      const settled = await callWorker(
+        apiRequest("/api/settlement", {
+          verificationToken: first.invoice.verificationToken,
+          paymentHash: first.invoice.paymentHash,
+          bolt11: first.invoice.bolt11,
+        }),
+      );
+      await expect(settled.response.json()).resolves.toMatchObject({
+        status: "settled",
+        settled: true,
+        preimagePresent: false,
+        providerStatus: "NIP57_PROVIDER_ATTESTATION",
+      });
+    },
+  );
 
   it("rejects cross-origin and malformed DTO requests before provider access", async () => {
     const crossOrigin = new IncomingRequest(`${APP_ORIGIN}/api/invoices`, {

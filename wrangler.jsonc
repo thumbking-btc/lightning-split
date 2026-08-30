@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "lightning-split",
   "main": "./worker/index.ts",
-  "compatibility_date": "2026-08-29",
+  "compatibility_date": "2026-08-30",
   "compatibility_flags": ["nodejs_compat"],
   "ratelimits": [
     {
@@ -14,6 +14,20 @@
       "name": "SETTLEMENT_RATE_LIMITER",
       "namespace_id": "2026083002",
       "simple": { "limit": 300, "period": 60 },
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "NIP57_RECEIPTS",
+        "class_name": "Nip57ReceiptRelay",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Nip57ReceiptRelay"],
     },
   ],
   "assets": {

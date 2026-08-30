@@ -172,16 +172,22 @@ function validateDescription(
     const bytes = wordsToBytesStrict(description);
     if (bytes.length > 639)
       return fail("DESCRIPTION", "Description is too long.");
+    let decoded: string;
     try {
-      return {
-        description: new TextDecoder("utf-8", {
-          fatal: true,
-          ignoreBOM: false,
-        }).decode(bytes),
-      };
+      decoded = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: false,
+      }).decode(bytes);
     } catch {
       return fail("DESCRIPTION", "Description is not valid UTF-8.");
     }
+    if (expectedDescription !== undefined && decoded !== expectedDescription) {
+      return fail(
+        "DESCRIPTION",
+        "Invoice description does not match the expected description.",
+      );
+    }
+    return { description: decoded };
   }
   return fail("DESCRIPTION", "Invoice description is missing.");
 }

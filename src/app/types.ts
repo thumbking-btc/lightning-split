@@ -6,6 +6,8 @@ import type {
   ProviderCommentStatus,
 } from "../domain/models";
 
+export const MAX_INVOICE_HISTORY = 10;
+
 export type ClientSlotStatus =
   | "generating"
   | "queued"
@@ -27,6 +29,22 @@ export interface ClientInvoice {
   readonly providerDomain: string;
   readonly disposable?: boolean;
   readonly verificationToken?: string;
+  readonly paymentRequest?: string;
+  /**
+   * Present only between receiving an invoice and durably storing that exact
+   * session state. Legacy invoices omit it and are therefore display-ready.
+   */
+  readonly awaitingPersistence?: true;
+}
+
+export interface HistoricalInvoiceAttempt {
+  readonly slotNumber: number;
+  readonly krwShare?: string;
+  readonly targetSats: string;
+  readonly attempt: number;
+  readonly invoice: ClientInvoice;
+  readonly retiredAt: string;
+  readonly settledAt?: string;
 }
 
 export interface ClientSlot {
@@ -43,6 +61,7 @@ export interface ClientSlot {
   };
   readonly settledAt?: string;
   readonly confirmedAt?: string;
+  readonly verificationDelayed?: true;
   readonly annotation?: PaymentAnnotation;
 }
 
@@ -65,6 +84,8 @@ export interface SettlementSession {
   readonly createdAt: string;
   readonly providerDomain?: string;
   readonly issuedPaymentHashes?: readonly string[];
+  /** Previous payable attempts retained for late settlement verification. */
+  readonly invoiceHistory?: readonly HistoricalInvoiceAttempt[];
   readonly slots: readonly ClientSlot[];
 }
 

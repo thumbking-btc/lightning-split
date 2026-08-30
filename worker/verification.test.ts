@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createEphemeralZapRecipientAlias,
+  createEphemeralZapRequest,
+  encodeLnurlPayUrl,
+} from "../src/nostr/zap";
+import {
   assertVerificationLink,
   openVerificationContext,
   sealVerificationContext,
@@ -69,5 +74,46 @@ describe("sealed verification token", () => {
     );
     const context = await openVerificationContext(token, SECRET, NOW + 2_000);
     expect(context.expiresAtMs).toBe(NOW + 1_000);
+  });
+
+  it("round-trips a NIP-57 provider-attestation method under the backward-compatible v1 token envelope", async () => {
+    const relayChannel = "44".repeat(32);
+    const request = createEphemeralZapRequest({
+      recipientPubkey: createEphemeralZapRecipientAlias(),
+      amountMsat: 1_000_000n,
+      lnurl: encodeLnurlPayUrl(
+        "https://wallet.example/.well-known/lnurlp/user",
+      ),
+      relays: [`wss://relay.example/api/nostr/${relayChannel}`],
+      createdAt: Math.floor(NOW / 1_000),
+    });
+    const providerPubkey = createEphemeralZapRecipientAlias();
+    const token = await sealVerificationContext(
+      {
+        nip57: {
+          relayChannel,
+          providerPubkey,
+          requestJson: request.json,
+        },
+        expectedPaymentHash: PAYMENT_HASH,
+        expectedInvoice: INVOICE,
+        expiresAt: new Date(NOW + 3_600_000).toISOString(),
+      },
+      SECRET,
+      NOW,
+    );
+
+    expect(token).toMatch(/^v1\./u);
+    expect(token).not.toContain(request.json);
+    const context = await openVerificationContext(token, SECRET, NOW);
+    expect(context.verifyUrl).toBeUndefined();
+    expect(context.nip57).toEqual({
+      relayChannel,
+      providerPubkey,
+      requestJson: request.json,
+    });
+    await expect(
+      assertVerificationLink(context, PAYMENT_HASH, INVOICE),
+    ).resolves.toBeUndefined();
   });
 });

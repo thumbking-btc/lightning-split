@@ -14,6 +14,7 @@ import {
 } from "../api/serialization";
 import { isRecord } from "../infrastructure/validation";
 import { MAX_BOLT11_LENGTH } from "../lightning/bolt11";
+import { buildQrPayload } from "./qr";
 
 export class ApiClientError extends Error {
   constructor(
@@ -26,6 +27,9 @@ export class ApiClientError extends Error {
     this.name = "ApiClientError";
   }
 }
+
+const SEALED_VERIFICATION_TOKEN =
+  /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 
 async function parseApiResponse(response: Response): Promise<unknown> {
   const value: unknown = await response.json();
@@ -86,11 +90,6 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
       (bit) => Number.isSafeInteger(bit) && Number(bit) >= 0,
     ) ||
     typeof value.invoice.providerDomain !== "string" ||
-    (value.invoice.disposable !== undefined &&
-      typeof value.invoice.disposable !== "boolean") ||
-    (value.invoice.verificationToken !== undefined &&
-      (typeof value.invoice.verificationToken !== "string" ||
-        value.invoice.verificationToken.length > 4_200)) ||
     (value.krwShare !== undefined &&
       (typeof value.krwShare !== "string" ||
         !/^[1-9]\d*$/u.test(value.krwShare)))
@@ -100,6 +99,25 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
       "인보이스 응답 형식이 올바르지 않습니다.",
       false,
     );
+  }
+  const verificationToken =
+    typeof value.invoice.verificationToken === "string" &&
+    SEALED_VERIFICATION_TOKEN.test(value.invoice.verificationToken)
+      ? value.invoice.verificationToken
+      : undefined;
+  let paymentRequest: string | undefined;
+  if (
+    typeof value.invoice.paymentRequest === "string" &&
+    value.invoice.paymentRequest.length >= 1 &&
+    value.invoice.paymentRequest.length <= 2_300
+  ) {
+    try {
+      buildQrPayload(value.invoice.paymentRequest, value.invoice.bolt11);
+      paymentRequest = value.invoice.paymentRequest;
+    } catch {
+      // Optional richer payment data from a mixed-version Worker must never
+      // hide the canonical BOLT11 invoice.
+    }
   }
   return {
     status: "pending",
@@ -119,9 +137,8 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
       ...(typeof value.invoice.disposable === "boolean"
         ? { disposable: value.invoice.disposable }
         : {}),
-      ...(typeof value.invoice.verificationToken === "string"
-        ? { verificationToken: value.invoice.verificationToken }
-        : {}),
+      ...(verificationToken === undefined ? {} : { verificationToken }),
+      ...(paymentRequest === undefined ? {} : { paymentRequest }),
     },
   };
 }
@@ -267,16 +284,6 @@ export async function requestInvoiceBatch(
     typeof value.provider.commentAllowed !== "number" ||
     !Number.isSafeInteger(value.provider.commentAllowed) ||
     Number(value.provider.commentAllowed) < 0 ||
-    (value.provider.commentStatus !== undefined &&
-      value.provider.commentStatus !== "forwarded" &&
-      value.provider.commentStatus !== "unsupported" &&
-      value.provider.commentStatus !== "partial") ||
-    (value.provider.descriptionStatus !== undefined &&
-      value.provider.descriptionStatus !== "embedded" &&
-      value.provider.descriptionStatus !== "notEmbedded" &&
-      value.provider.descriptionStatus !== "partial") ||
-    (value.provider.automaticSettlementAvailable !== undefined &&
-      typeof value.provider.automaticSettlementAvailable !== "boolean") ||
     !Array.isArray(value.slots) ||
     typeof value.completedCount !== "number" ||
     !Number.isSafeInteger(value.completedCount) ||
@@ -405,7 +412,17 @@ export async function fetchSettlement(input: {
     !["settled", "unsettled", "expired", "notAvailable"].includes(
       String(value.status),
     ) ||
-    typeof value.settled !== "boolean"
+    typeof value.settled !== "boolean" ||
+    (value.status === "settled") !== value.settled ||
+    (value.checkedAt !== undefined &&
+      (typeof value.checkedAt !== "string" ||
+        !Number.isFinite(Date.parse(value.checkedAt)))) ||
+    (value.preimagePresent !== undefined &&
+      typeof value.preimagePresent !== "boolean") ||
+    (value.providerStatus !== undefined &&
+      value.providerStatus !== null &&
+      (typeof value.providerStatus !== "string" ||
+        value.providerStatus.length > 128))
   ) {
     throw new ApiClientError(
       "INVALID_RESPONSE",

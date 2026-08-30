@@ -177,7 +177,7 @@ describe("v1 mobile accessibility states", () => {
     expect(deleteRecord).toContain("이 정산 기록 삭제");
   });
 
-  it("labels manual confirmation and post-payment sender annotation clearly", () => {
+  it("labels completion without leaving a payable QR or copy action", () => {
     const slot: ClientSlot = {
       slotNumber: 1,
       targetSats: "1000",
@@ -208,5 +208,164 @@ describe("v1 mobile accessibility states", () => {
     expect(html).toContain("사용자 확인");
     expect(html).toContain("누가 보냈나요?");
     expect(html).toContain("라이트닝 네트워크가 인증한 송금자");
+    expect(html).not.toContain("결제 요청 복사");
+    expect(html).not.toContain("QR 생성 중");
+
+    const settledHtml = renderToStaticMarkup(
+      <InvoiceCard
+        slot={{
+          ...slot,
+          status: "settled",
+          settledAt: "2030-01-01T00:01:00.000Z",
+        }}
+        candidates={[]}
+        retrying={false}
+        onAnnotate={vi.fn()}
+        onRetry={vi.fn()}
+        onManualConfirm={vi.fn()}
+      />,
+    );
+    expect(settledHtml).not.toContain("결제 요청 복사");
+    expect(settledHtml).not.toContain("QR 생성 중");
+  });
+
+  it("keeps automatic verification primary while preserving a direct fallback", () => {
+    const pending: ClientSlot = {
+      slotNumber: 1,
+      targetSats: "1000",
+      attempt: 1,
+      status: "pending",
+      invoice: {
+        bolt11: "lnbc1automatic",
+        paymentHash: "11".repeat(32),
+        timestampSeconds: 1,
+        expirySeconds: 3600,
+        expiresAt: "2030-01-01T01:00:00.000Z",
+        payeeNodeId: `02${"11".repeat(32)}`,
+        featureBits: [],
+        providerDomain: "wallet.example",
+        verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+      },
+    };
+    const renderCard = (slot: ClientSlot) =>
+      renderToStaticMarkup(
+        <InvoiceCard
+          slot={slot}
+          candidates={[]}
+          retrying={false}
+          onAnnotate={vi.fn()}
+          onRetry={vi.fn()}
+          onManualConfirm={vi.fn()}
+        />,
+      );
+
+    const pendingHtml = renderCard(pending);
+    expect(pendingHtml).not.toContain("결제 완료로 표시");
+    expect(pendingHtml).toContain("직접 확인 후 완료로 표시");
+    expect(pendingHtml).toContain("결제 요청 복사");
+
+    const delayedHtml = renderCard({
+      ...pending,
+      verificationDelayed: true,
+    });
+    expect(delayedHtml).toContain("결제 완료로 표시");
+    expect(delayedHtml).toContain("결제 요청 복사");
+
+    const verifyingHtml = renderCard({
+      ...pending,
+      status: "verifyingExpired",
+    });
+    expect(verifyingHtml).toContain("결제 완료로 표시");
+    expect(verifyingHtml).not.toContain("결제 요청 복사");
+  });
+
+  it("keeps raw BOLT11 as the default QR and offers richer payer metadata explicitly", () => {
+    const html = renderToStaticMarkup(
+      <InvoiceCard
+        slot={{
+          slotNumber: 1,
+          targetSats: "1000",
+          attempt: 1,
+          status: "pending",
+          invoice: {
+            bolt11: "lnbc1canonical",
+            paymentRequest:
+              "bitcoin:?lightning=lnbc1canonical&message=8%2F30%20dinner",
+            paymentHash: "11".repeat(32),
+            timestampSeconds: 1,
+            expirySeconds: 3600,
+            expiresAt: "2030-01-01T01:00:00.000Z",
+            payeeNodeId: `02${"11".repeat(32)}`,
+            featureBits: [],
+            providerDomain: "wallet.example",
+          },
+        }}
+        candidates={[]}
+        retrying={false}
+        onAnnotate={vi.fn()}
+        onRetry={vi.fn()}
+        onManualConfirm={vi.fn()}
+      />,
+    );
+    expect(html).toContain("메모 포함 결제 QR 보기");
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it("does not offer a futile retry when mandatory payer data is unsupported", () => {
+    const html = renderToStaticMarkup(
+      <InvoiceCard
+        slot={{
+          slotNumber: 1,
+          targetSats: "1000",
+          attempt: 1,
+          status: "failed",
+          failure: {
+            code: "PAYER_DATA_REQUIRED",
+            message: "payer data required",
+            retryable: false,
+          },
+        }}
+        candidates={[]}
+        retrying={false}
+        onAnnotate={vi.fn()}
+        onRetry={vi.fn()}
+        onManualConfirm={vi.fn()}
+      />,
+    );
+    expect(html).toContain("필수 송금자 정보");
+    expect(html).not.toContain("이 결제만 다시 만들기");
+  });
+
+  it("does not expose a new invoice until its session is durably stored", () => {
+    const html = renderToStaticMarkup(
+      <InvoiceCard
+        slot={{
+          slotNumber: 1,
+          targetSats: "1000",
+          attempt: 1,
+          status: "pending",
+          invoice: {
+            bolt11: "lnbc1awaiting",
+            paymentHash: "11".repeat(32),
+            timestampSeconds: 1,
+            expirySeconds: 3600,
+            expiresAt: "2030-01-01T01:00:00.000Z",
+            payeeNodeId: `02${"11".repeat(32)}`,
+            featureBits: [],
+            providerDomain: "wallet.example",
+            awaitingPersistence: true,
+          },
+        }}
+        candidates={[]}
+        retrying={false}
+        onAnnotate={vi.fn()}
+        onRetry={vi.fn()}
+        onManualConfirm={vi.fn()}
+      />,
+    );
+    expect(html).toContain("기기에 안전하게 저장");
+    expect(html).not.toContain("결제 요청 복사");
+    expect(html).not.toContain("QR 생성 중");
+    expect(html).not.toContain("결제 완료로 표시");
   });
 });

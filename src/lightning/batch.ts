@@ -9,8 +9,18 @@ import type {
   ProviderCommentStatus,
 } from "../domain/models";
 import { InfrastructureError } from "../infrastructure/errors";
-import { Bolt11InvoiceError, validateBolt11Invoice } from "./bolt11";
-import type { LnurlPayDiscovery, LnurlPayClient } from "./lnurl";
+import type { ValidatedZapRequest } from "../nostr/zap";
+import { validateZapInvoice } from "../nostr/zap";
+import {
+  Bolt11InvoiceError,
+  type ValidatedBolt11Invoice,
+  validateBolt11Invoice,
+} from "./bolt11";
+import type {
+  LnurlInvoiceResponse,
+  LnurlPayDiscovery,
+  LnurlPayClient,
+} from "./lnurl";
 
 export interface InvoiceSlotRequest {
   readonly slotNumber: number;
@@ -42,6 +52,18 @@ export interface BatchDependencies {
   readonly client: Pick<LnurlPayClient, "discover" | "requestInvoice">;
   readonly policy?: LightningPolicy;
   readonly now?: () => number;
+  readonly prepareNostrPayment?: (
+    discovery: LnurlPayDiscovery,
+    slot: InvoiceSlotRequest,
+    providerComment?: string,
+  ) => Promise<NostrPaymentPreparation>;
+}
+
+export interface NostrPaymentPreparation {
+  readonly request: ValidatedZapRequest;
+  readonly relayChannel: string;
+  readonly relayUrl: string;
+  readonly providerPubkey: string;
 }
 
 function failureSlot(
@@ -49,6 +71,15 @@ function failureSlot(
   error: unknown,
 ): FailedInvoiceSlot {
   const known = error instanceof InfrastructureError;
+  const canRetryWithFreshProviderState =
+    known &&
+    new Set([
+      "PROVIDER_REJECTED",
+      "INVALID_RESPONSE",
+      "INVALID_BOLT11",
+      "DUPLICATE_PAYMENT_HASH",
+      "BATCH_ABORTED",
+    ]).has(error.code);
   return {
     ...slot,
     status: "failed",
@@ -60,7 +91,12 @@ function failureSlot(
           : "UNKNOWN",
       message:
         error instanceof Error ? error.message : "Invoice generation failed.",
-      retryable: known ? error.retryable : false,
+      retryable:
+        error instanceof Bolt11InvoiceError
+          ? true
+          : known
+            ? error.retryable || canRetryWithFreshProviderState
+            : false,
     },
   };
 }
@@ -138,19 +174,31 @@ function invoiceBindsPaymentDescription(
     readonly descriptionHash?: string;
   },
   discovery: LnurlPayDiscovery,
+  alternateDescriptionPreimage?: string,
 ): boolean {
-  if (invoice.description?.includes(description)) return true;
+  if (invoice.description === description) return true;
   if (!invoice.descriptionHash) return false;
   if (
     invoice.descriptionHash ===
     bytesToHex(sha256(new TextEncoder().encode(description)))
   )
     return true;
-  return discovery.metadataEntries.some(
-    (entry) =>
-      (entry[0] === "text/plain" || entry[0] === "text/long-desc") &&
-      typeof entry[1] === "string" &&
-      entry[1].includes(description),
+  if (
+    invoice.descriptionHash ===
+      bytesToHex(sha256(new TextEncoder().encode(discovery.metadata))) &&
+    discovery.metadataEntries.some(
+      (entry) =>
+        (entry[0] === "text/plain" || entry[0] === "text/long-desc") &&
+        entry[1] === description,
+    )
+  ) {
+    return true;
+  }
+  return (
+    alternateDescriptionPreimage !== undefined &&
+    alternateDescriptionPreimage.includes(description) &&
+    invoice.descriptionHash ===
+      bytesToHex(sha256(new TextEncoder().encode(alternateDescriptionPreimage)))
   );
 }
 
@@ -194,27 +242,84 @@ export async function generateInvoiceBatch(
           input.providerComment,
           slotDiscovery,
         );
-        const callback = await dependencies.client.requestInvoice(
-          slotDiscovery,
-          slot.targetSats,
-          {
-            ...(providerComment !== undefined
-              ? { comment: providerComment }
-              : {}),
-          },
-        );
-        let validated;
-        try {
-          validated = validateBolt11Invoice(callback.invoice, {
-            expectedSats: slot.targetSats,
-            nowSeconds: Math.floor(now() / 1_000),
-            minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
-          });
-        } catch (cause) {
+        let nostrPreparation: NostrPaymentPreparation | undefined;
+        if (
+          slotDiscovery.allowsNostr &&
+          slotDiscovery.nostrPubkey !== undefined &&
+          dependencies.prepareNostrPayment !== undefined
+        ) {
+          try {
+            nostrPreparation = await dependencies.prepareNostrPayment(
+              slotDiscovery,
+              slot,
+              providerComment,
+            );
+          } catch {
+            // NIP-57 is optional. A local preparation failure must leave the
+            // base LUD-06 path available.
+          }
+        }
+        let callback: LnurlInvoiceResponse | undefined;
+        let validated: ValidatedBolt11Invoice | undefined;
+        if (nostrPreparation !== undefined) {
+          try {
+            callback = await dependencies.client.requestInvoice(
+              slotDiscovery,
+              slot.targetSats,
+              {
+                ...(providerComment === undefined
+                  ? {}
+                  : { comment: providerComment }),
+                nostr: {
+                  requestJson: nostrPreparation.request.json,
+                  lnurl: nostrPreparation.request.lnurl,
+                },
+              },
+            );
+            validated = validateZapInvoice(
+              callback.invoice,
+              nostrPreparation.request,
+            );
+            if (
+              validated.expiresAt - Math.floor(now() / 1_000) <
+              policy.minimumInvoiceRemainingSeconds
+            ) {
+              throw new Bolt11InvoiceError(
+                "EXPIRED",
+                "The NIP-57 invoice is expired or near expiry.",
+              );
+            }
+          } catch {
+            // A provider may advertise NIP-57 but reject a particular request.
+            // Retry the same slot through plain LUD-06; never turn an optional
+            // capability into a prerequisite for invoice creation.
+            nostrPreparation = undefined;
+          }
+        }
+        if (nostrPreparation === undefined) {
+          callback = await dependencies.client.requestInvoice(
+            slotDiscovery,
+            slot.targetSats,
+            providerComment === undefined ? {} : { comment: providerComment },
+          );
+          try {
+            validated = validateBolt11Invoice(callback.invoice, {
+              expectedSats: slot.targetSats,
+              nowSeconds: Math.floor(now() / 1_000),
+              minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
+            });
+          } catch (cause) {
+            throw new InfrastructureError(
+              "INVALID_BOLT11",
+              "The provider returned an invalid BOLT11 invoice.",
+              { cause },
+            );
+          }
+        }
+        if (callback === undefined || validated === undefined) {
           throw new InfrastructureError(
-            "INVALID_BOLT11",
-            "The provider returned an invalid BOLT11 invoice.",
-            { cause },
+            "INVALID_RESPONSE",
+            "The provider invoice result is incomplete.",
           );
         }
         const pendingSlot: PendingInvoiceSlot = {
@@ -232,15 +337,33 @@ export async function generateInvoiceBatch(
             ...(callback.verifyUrl !== undefined
               ? { verifyUrl: callback.verifyUrl }
               : {}),
+            ...(callback.successAction === undefined
+              ? {}
+              : { successAction: callback.successAction }),
+            ...(nostrPreparation === undefined
+              ? {}
+              : {
+                  nostrVerification: {
+                    relayChannel: nostrPreparation.relayChannel,
+                    relayUrl: nostrPreparation.relayUrl,
+                    providerPubkey: nostrPreparation.providerPubkey,
+                    requestJson: nostrPreparation.request.json,
+                    requestId: nostrPreparation.request.event.id,
+                    recipientPubkey: nostrPreparation.request.recipientPubkey,
+                    lnurl: nostrPreparation.request.lnurl,
+                  },
+                }),
             provider: {
               domain: slotDiscovery.domain,
               discoveryUrl: slotDiscovery.discoveryUrl,
               callbackUrl: slotDiscovery.callbackUrl,
+              metadata: slotDiscovery.metadata,
             },
           },
-          settlementCheck: callback.verifyUrl
-            ? { status: "notChecked" }
-            : { status: "notAvailable" },
+          settlementCheck:
+            callback.verifyUrl || nostrPreparation !== undefined
+              ? { status: "notChecked" }
+              : { status: "notAvailable" },
         };
         return {
           kind: "success" as const,
@@ -259,6 +382,10 @@ export async function generateInvoiceBatch(
                     input.providerComment,
                     validated,
                     slotDiscovery,
+                    nostrPreparation?.request.event.content ===
+                      input.providerComment
+                      ? nostrPreparation.request.json
+                      : undefined,
                   )
                 ? ("embedded" as const)
                 : ("notEmbedded" as const),

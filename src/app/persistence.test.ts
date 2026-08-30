@@ -283,4 +283,52 @@ describe("local settlement persistence", () => {
     };
     expect(restoreSession(serializeSession(queued))).toEqual(queued);
   });
+
+  it("round-trips bounded historical invoice evidence", () => {
+    const historical: SettlementSession = {
+      ...SESSION,
+      issuedPaymentHashes: ["11".repeat(32), "22".repeat(32)],
+      invoiceHistory: [
+        {
+          slotNumber: 1,
+          krwShare: "21500",
+          targetSats: "13438",
+          attempt: 2,
+          invoice: {
+            ...SESSION.slots[0]!.invoice!,
+            bolt11: "lnbc-history",
+            paymentHash: "22".repeat(32),
+            verificationToken: `v1.${"c".repeat(16)}.${"d".repeat(32)}`,
+          },
+          retiredAt: "2030-01-01T01:05:00.000Z",
+          settledAt: "2030-01-01T01:06:00.000Z",
+        },
+      ],
+    };
+    expect(restoreSession(serializeSession(historical))).toEqual(historical);
+  });
+
+  it("treats a persisted awaiting invoice as display-ready after recovery", () => {
+    const { settledAt: _settledAt, ...pendingSlot } = SESSION.slots[0]!;
+    void _settledAt;
+    const awaiting: SettlementSession = {
+      ...SESSION,
+      slots: [
+        {
+          ...pendingSlot,
+          status: "pending",
+          invoice: {
+            ...SESSION.slots[0]!.invoice!,
+            awaitingPersistence: true,
+          },
+        },
+      ],
+    };
+    const restored = restoreSession(serializeSession(awaiting));
+    expect(restored.slots[0]?.invoice?.awaitingPersistence).toBe(true);
+    expect(
+      recoverInterruptedSession(restored).slots[0]?.invoice
+        ?.awaitingPersistence,
+    ).toBeUndefined();
+  });
 });

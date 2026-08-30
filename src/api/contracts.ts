@@ -59,6 +59,8 @@ export interface PendingInvoiceSlotDto {
     readonly providerDomain: string;
     readonly disposable?: boolean;
     readonly verificationToken?: string;
+    /** Provider-neutral QR/copy payload; omitted for legacy Workers. */
+    readonly paymentRequest?: string;
   };
 }
 

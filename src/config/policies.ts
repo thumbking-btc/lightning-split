@@ -19,6 +19,8 @@ export interface LightningPolicy {
   readonly settlementHttp: HttpFetchPolicy;
   readonly minimumInvoiceRemainingSeconds: number;
   readonly settlementFinalVerificationGraceSeconds: number;
+  /** How long expired/reissued invoice evidence remains queryable for late settlement. */
+  readonly settlementHistoricalRetentionSeconds: number;
   readonly maximumBatchSize: number;
   readonly maximumProviderCommentCharacters: number;
 }
@@ -63,6 +65,7 @@ export const DEFAULT_LIGHTNING_POLICY: Readonly<LightningPolicy> =
     }),
     minimumInvoiceRemainingSeconds: 120,
     settlementFinalVerificationGraceSeconds: 60,
+    settlementHistoricalRetentionSeconds: 7 * 24 * 60 * 60,
     maximumBatchSize: 10,
     maximumProviderCommentCharacters: 255,
   });

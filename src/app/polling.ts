@@ -10,15 +10,68 @@ import type { ClientSlot, SettlementSession } from "./types";
 export const POLLING_BACKOFF_MS = [
   5_000, 8_000, 13_000, 21_000, 30_000,
 ] as const;
+export const VERIFICATION_DELAY_FAILURE_THRESHOLD = 3;
+
+export function shouldMarkVerificationDelayed(failureCount: number): boolean {
+  return failureCount >= VERIFICATION_DELAY_FAILURE_THRESHOLD;
+}
 
 export function isSlotPollable(slot: ClientSlot, nowMs = Date.now()): boolean {
   const graceMs =
     DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds * 1_000;
+  const retentionMs =
+    DEFAULT_LIGHTNING_POLICY.settlementHistoricalRetentionSeconds * 1_000;
+  const pollDeadlineMs =
+    Date.parse(slot.invoice?.expiresAt ?? "") +
+    (slot.status === "manuallyConfirmed" ? retentionMs : graceMs);
   return (
-    (slot.status === "pending" || slot.status === "verifyingExpired") &&
+    (slot.status === "pending" ||
+      slot.status === "verifyingExpired" ||
+      slot.status === "manuallyConfirmed") &&
     slot.invoice?.verificationToken !== undefined &&
-    Date.parse(slot.invoice.expiresAt) + graceMs > nowMs
+    slot.invoice.awaitingPersistence !== true &&
+    pollDeadlineMs > nowMs
   );
+}
+
+export interface SettlementPollingTarget {
+  readonly invoice: NonNullable<ClientSlot["invoice"]>;
+  readonly identity: SettlementInvoiceIdentity;
+}
+
+export function settlementPollingTargets(
+  session: SettlementSession,
+  nowMs = Date.now(),
+): readonly SettlementPollingTarget[] {
+  const current = session.slots.flatMap((slot) => {
+    if (!isSlotPollable(slot, nowMs) || !slot.invoice) return [];
+    const identity = settlementInvoiceIdentity(slot);
+    return identity ? [{ invoice: slot.invoice, identity }] : [];
+  });
+  const retentionMs =
+    DEFAULT_LIGHTNING_POLICY.settlementHistoricalRetentionSeconds * 1_000;
+  const historical = (session.invoiceHistory ?? []).flatMap((attempt) => {
+    const verificationToken = attempt.invoice.verificationToken;
+    if (
+      verificationToken === undefined ||
+      attempt.settledAt !== undefined ||
+      Date.parse(attempt.invoice.expiresAt) + retentionMs <= nowMs
+    ) {
+      return [];
+    }
+    return [
+      {
+        invoice: attempt.invoice,
+        identity: {
+          slotNumber: attempt.slotNumber,
+          attempt: attempt.attempt,
+          paymentHash: attempt.invoice.paymentHash,
+          verificationToken,
+        },
+      },
+    ];
+  });
+  return [...current, ...historical];
 }
 
 export function settlementInvoiceIdentity(
@@ -28,7 +81,9 @@ export function settlementInvoiceIdentity(
   if (
     slot.invoice === undefined ||
     verificationToken === undefined ||
-    (slot.status !== "pending" && slot.status !== "verifyingExpired")
+    (slot.status !== "pending" &&
+      slot.status !== "verifyingExpired" &&
+      slot.status !== "manuallyConfirmed")
   ) {
     return undefined;
   }
