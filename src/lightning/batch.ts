@@ -8,6 +8,7 @@ import type {
 import { InfrastructureError } from "../infrastructure/errors";
 import { Bolt11InvoiceError, validateBolt11Invoice } from "./bolt11";
 import type { LnurlPayDiscovery, LnurlPayClient } from "./lnurl";
+import { selectSettlementCapability } from "./settlement";
 
 export interface InvoiceSlotRequest {
   readonly slotNumber: number;
@@ -209,6 +210,7 @@ export async function generateInvoiceBatch(
             "The provider requires a post-payment action that this payment flow cannot preserve.",
           );
         }
+        const settlementCapability = selectSettlementCapability(callback);
         let validated;
         try {
           validated = validateBolt11Invoice(callback.invoice, {
@@ -244,9 +246,9 @@ export async function generateInvoiceBatch(
             payeeNodeId: validated.payeeNodeId,
             featureBits: validated.featureBits,
             disposable: callback.disposable,
-            ...(callback.verifyUrl === undefined
-              ? {}
-              : { verifyUrl: callback.verifyUrl }),
+            ...(settlementCapability.method === "lud21"
+              ? { verifyUrl: settlementCapability.verifyUrl }
+              : {}),
             provider: {
               domain: discovery.domain,
               discoveryUrl: discovery.discoveryUrl,
@@ -254,9 +256,9 @@ export async function generateInvoiceBatch(
             },
           },
           settlementCheck:
-            callback.verifyUrl === undefined
-              ? { status: "notAvailable" }
-              : { status: "notChecked" },
+            settlementCapability.method === "lud21"
+              ? { status: "notChecked" }
+              : { status: "notAvailable" },
         };
         return {
           kind: "success" as const,
