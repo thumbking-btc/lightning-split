@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import packageJson from "./package.json" with { type: "json" };
 
@@ -20,17 +20,37 @@ function resolveGitCommit(): string {
   }
 }
 
+const appVersion = `v${packageJson.version}`;
+const gitCommit = resolveGitCommit();
+
+function buildIdentityPlugin(): Plugin {
+  return {
+    name: "lightning-split-build-identity",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "build.json",
+        source: `${JSON.stringify({ version: appVersion, commit: gitCommit })}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(`v${packageJson.version}`),
-    __GIT_COMMIT__: JSON.stringify(resolveGitCommit()),
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __GIT_COMMIT__: JSON.stringify(gitCommit),
   },
   plugins: [
     react(),
+    buildIdentityPlugin(),
     VitePWA({
       registerType: "prompt",
       filename: "app-sw.js",
       includeAssets: ["lightning-split.svg"],
+      workbox: {
+        globIgnores: ["**/build.json"],
+      },
       manifest: {
         name: "Lightning Split",
         short_name: "LN Split",

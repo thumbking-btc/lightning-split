@@ -9,3 +9,6 @@
 
 /app-sw.js
   Cache-Control: no-store, max-age=0, must-revalidate
+
+/build.json
+  Cache-Control: no-store, max-age=0, must-revalidate
