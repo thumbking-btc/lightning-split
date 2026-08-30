@@ -15,6 +15,11 @@ import {
 } from "./app/persistence";
 import { QrCode } from "./app/QrCode";
 import {
+  DELETE_SETTLEMENT_RECORD_CONFIRMATION,
+  hasPendingSettlement,
+  NEW_SETTLEMENT_PENDING_CONFIRMATION,
+} from "./app/sessionActions";
+import {
   annotateSettledSlot,
   applyBatchResponse,
   applySlotRetryResponse,
@@ -313,7 +318,7 @@ export function MarketSummary({
           <strong>
             {information?.premium
               ? formatPremium(information.premium.basisPoints)
-              : "정보 없음"}
+              : "일시적으로 불러올 수 없음"}
           </strong>
         </div>
       </div>
@@ -349,6 +354,18 @@ export function SettlementHeader({
         새 정산
       </button>
     </header>
+  );
+}
+
+export function SettlementRecordDeleteButton({
+  onDelete,
+}: {
+  readonly onDelete: () => void;
+}) {
+  return (
+    <button className="danger-text-button" type="button" onClick={onDelete}>
+      이 정산 기록 삭제
+    </button>
   );
 }
 
@@ -735,25 +752,16 @@ export function App() {
   };
 
   const newSettlement = async () => {
-    const hasPending = session?.slots.some(
-      (slot) => slot.status === "pending" || slot.status === "generating",
-    );
     if (
-      hasPending &&
-      !window.confirm(
-        "아직 완료되지 않은 결제가 있습니다. 현재 정산 기록을 지우고 새로 시작하시겠습니까?",
-      )
+      hasPendingSettlement(session) &&
+      !window.confirm(NEW_SETTLEMENT_PENDING_CONFIRMATION)
     )
       return;
     await resetSession();
   };
 
   const deleteSettlementRecord = async () => {
-    if (
-      window.confirm(
-        "이 기기에 저장된 현재 정산 기록을 삭제하시겠습니까? 결제 요청은 취소되지 않습니다.",
-      )
-    )
+    if (window.confirm(DELETE_SETTLEMENT_RECORD_CONFIRMATION))
       await resetSession();
   };
 
@@ -953,13 +961,9 @@ export function App() {
         <p className="swipe-hint">
           버튼이나 좌우 스와이프로 각 QR을 보여주십시오.
         </p>
-        <button
-          className="danger-text-button"
-          type="button"
-          onClick={() => void deleteSettlementRecord()}
-        >
-          이 정산 기록 삭제
-        </button>
+        <SettlementRecordDeleteButton
+          onDelete={() => void deleteSettlementRecord()}
+        />
       </main>
     );
   }

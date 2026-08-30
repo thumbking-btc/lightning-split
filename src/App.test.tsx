@@ -5,10 +5,16 @@ import {
   AmountInput,
   InvoiceCard,
   MarketSummary,
+  SettlementRecordDeleteButton,
   SettlementHeader,
   SettlementPreviewDetails,
 } from "./App";
 import { serializeBigIntDecimal } from "./api/serialization";
+import {
+  DELETE_SETTLEMENT_RECORD_CONFIRMATION,
+  hasPendingSettlement,
+  NEW_SETTLEMENT_PENDING_CONFIRMATION,
+} from "./app/sessionActions";
 import type { ClientSlot } from "./app/types";
 
 describe("v1 mobile accessibility states", () => {
@@ -89,6 +95,63 @@ describe("v1 mobile accessibility states", () => {
     expect(html).toContain("실시간");
     expect(html).not.toContain("upbit");
     expect(html).not.toContain("fallback");
+  });
+
+  it("explains a temporarily unavailable premium without implying a permanent absence", () => {
+    const html = renderToStaticMarkup(
+      <MarketSummary
+        market={{
+          connection: "recent",
+          information: {
+            ok: true,
+            snapshot: {
+              priceKrw: serializeBigIntDecimal(162_345_000n),
+              source: "upbit",
+              market: "KRW-BTC",
+              observedAt: new Date().toISOString(),
+              retrievedAt: new Date().toISOString(),
+              snapshotAt: new Date().toISOString(),
+              fallbackUsed: false,
+            },
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("일시적으로 불러올 수 없음");
+    expect(html).not.toContain("정보 없음");
+  });
+
+  it("distinguishes starting a new settlement from deleting its local record", () => {
+    const pendingSession = {
+      slots: [{ status: "pending" }],
+    } as const;
+    const completedSession = {
+      slots: [{ status: "settled" }],
+    } as const;
+    const expiredSession = {
+      slots: [{ status: "expired" }],
+    } as const;
+
+    expect(hasPendingSettlement(pendingSession)).toBe(true);
+    expect(hasPendingSettlement(completedSession)).toBe(false);
+    expect(hasPendingSettlement(expiredSession)).toBe(true);
+    expect(NEW_SETTLEMENT_PENDING_CONFIRMATION).toContain("새 정산을 시작");
+    expect(NEW_SETTLEMENT_PENDING_CONFIRMATION).not.toContain("지우");
+    expect(DELETE_SETTLEMENT_RECORD_CONFIRMATION).toContain("기기에 저장된");
+    expect(DELETE_SETTLEMENT_RECORD_CONFIRMATION).toContain(
+      "취소되지 않습니다",
+    );
+
+    const newSettlement = renderToStaticMarkup(
+      <SettlementHeader note={undefined} onNewSettlement={vi.fn()} />,
+    );
+    const deleteRecord = renderToStaticMarkup(
+      <SettlementRecordDeleteButton onDelete={vi.fn()} />,
+    );
+    expect(newSettlement).toContain("새 정산");
+    expect(newSettlement).not.toContain("danger-text-button");
+    expect(deleteRecord).toContain("danger-text-button");
+    expect(deleteRecord).toContain("이 정산 기록 삭제");
   });
 
   it("labels manual confirmation and post-payment sender annotation clearly", () => {
