@@ -352,7 +352,7 @@ export function SettlementHeader({
       <div>
         <span className="eyebrow">LIGHTNING SPLIT</span>
         <h1>{note || "정산 진행 중"}</h1>
-        {note && <small>결제 설명</small>}
+        {note && <small>정산 메모</small>}
       </div>
       <button
         className="text-button touch-target"
@@ -1203,10 +1203,10 @@ export function App() {
         </label>
         <details className="optional-fields">
           <summary>
-            결제 설명과 참여자 이름 추가 <span>선택</span>
+            메모와 참여자 이름 추가 <span>선택</span>
           </summary>
           <label className="stacked-field">
-            결제 설명
+            정산 메모
             <input
               value={overallNote}
               onChange={(event) => setOverallNote(event.target.value)}

@@ -544,10 +544,21 @@ describe("Lightning Split Worker API", () => {
     expect(settlementResponse.status).toBe(429);
   });
 
-  it("does not require a sealing secret when the provider has no verify capability", async () => {
+  it("does not mistake Nostr zap support for a settlement verify capability", async () => {
     const allow = { limit: () => Promise.resolve({ success: true }) };
-    mockDiscovery();
     network.use(
+      http.get(DISCOVERY_URL, () =>
+        HttpResponse.json({
+          tag: "payRequest",
+          callback: CALLBACK_URL,
+          minSendable: 1_000,
+          maxSendable: 100_000_000,
+          metadata: '[["text/plain","test"]]',
+          commentAllowed: 40,
+          allowsNostr: true,
+          nostrPubkey: "02".repeat(32),
+        }),
+      ),
       http.get(CALLBACK_URL, ({ request }) => {
         const amountSats =
           BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
