@@ -254,15 +254,28 @@ export function applyBatchResponse(
         slot.status === "pending" ? [slot.invoice.paymentHash] : [],
       ),
     ),
-    slots: response.slots.map((slot): ClientSlot =>
-      slot.status === "pending"
+    slots: response.slots.map((slot): ClientSlot => {
+      const existing = session.slots.find(
+        (candidate) => candidate.slotNumber === slot.slotNumber,
+      );
+      const annotation =
+        existing?.annotation === undefined
+          ? {}
+          : { annotation: existing.annotation };
+      return slot.status === "pending"
         ? {
             ...slot,
+            ...annotation,
             status: "pending",
             invoice: { ...slot.invoice, awaitingPersistence: true },
           }
-        : { ...slot, status: "failed", failure: slot.failure },
-    ),
+        : {
+            ...slot,
+            ...annotation,
+            status: "failed",
+            failure: slot.failure,
+          };
+    }),
   };
 }
 
@@ -298,6 +311,9 @@ export function prepareSlotRetry(
             ...(slot.krwShare === undefined ? {} : { krwShare: slot.krwShare }),
             attempt: slot.attempt + 1,
             status: "generating",
+            ...(slot.annotation === undefined
+              ? {}
+              : { annotation: slot.annotation }),
           }
         : slot,
     ),
@@ -345,10 +361,13 @@ export function applySlotRetryResponse(
   ) {
     return session;
   }
+  const annotation =
+    current.annotation === undefined ? {} : { annotation: current.annotation };
   if (current.status !== "generating") {
     if (result.status !== "pending") return session;
     const issuedSlot: ClientSlot = {
       ...result,
+      ...annotation,
       status: "pending",
       invoice: { ...result.invoice, awaitingPersistence: true },
     };
@@ -382,10 +401,16 @@ export function applySlotRetryResponse(
       return result.status === "pending"
         ? {
             ...result,
+            ...annotation,
             status: "pending",
             invoice: { ...result.invoice, awaitingPersistence: true },
           }
-        : { ...result, status: "failed", failure: result.failure };
+        : {
+            ...result,
+            ...annotation,
+            status: "failed",
+            failure: result.failure,
+          };
     }),
   };
 }
@@ -801,8 +826,7 @@ export function annotateSettledSlot(
   return {
     ...session,
     slots: session.slots.map((slot): ClientSlot =>
-      slot.slotNumber === slotNumber &&
-      (slot.status === "settled" || slot.status === "manuallyConfirmed")
+      slot.slotNumber === slotNumber
         ? {
             ...slot,
             annotation: {
@@ -854,6 +878,38 @@ export function manuallyConfirmSlot(
         status: "manuallyConfirmed",
         confirmedAt: now.toISOString(),
       };
+    }),
+  };
+}
+
+export function undoManualConfirmation(
+  session: SettlementSession,
+  slotNumber: number,
+  now = new Date(),
+): SettlementSession {
+  const target = session.slots.find((slot) => slot.slotNumber === slotNumber);
+  if (!target) throw new Error("되돌릴 결제를 찾지 못했습니다.");
+  if (target.status !== "manuallyConfirmed" || !target.invoice) return session;
+
+  const expiresAtMs = Date.parse(target.invoice.expiresAt);
+  const finalVerificationGraceMs =
+    DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds * 1_000;
+  const nextStatus: ClientSlot["status"] =
+    expiresAtMs > now.getTime()
+      ? "pending"
+      : target.invoice.verificationToken !== undefined &&
+          now.getTime() < expiresAtMs + finalVerificationGraceMs
+        ? "verifyingExpired"
+        : "expired";
+
+  return {
+    ...session,
+    slots: session.slots.map((slot): ClientSlot => {
+      if (slot.slotNumber !== slotNumber || slot.status !== "manuallyConfirmed")
+        return slot;
+      const { confirmedAt: _confirmedAt, ...unconfirmed } = slot;
+      void _confirmedAt;
+      return { ...unconfirmed, status: nextStatus };
     }),
   };
 }
