@@ -25,10 +25,6 @@
     ],
   },
   "exports": {
-    "Nip57ReceiptRelay": {
-      "type": "durable-object",
-      "state": "deleted",
-    },
     "InvoiceBatchCoordinator": {
       "type": "durable-object",
       "storage": "sqlite",
