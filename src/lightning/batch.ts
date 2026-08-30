@@ -1,8 +1,10 @@
 import type { LightningPolicy } from "../config/policies";
 import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type {
   DeferredInvoiceSlot,
   FailedInvoiceSlot,
+  PaymentDescriptionStatus,
   PendingInvoiceSlot,
   ProviderCommentStatus,
 } from "../domain/models";
@@ -33,6 +35,7 @@ export interface GenerateInvoiceBatchResult {
   readonly completedCount: number;
   readonly failedCount: number;
   readonly providerCommentStatus?: ProviderCommentStatus;
+  readonly paymentDescriptionStatus?: PaymentDescriptionStatus;
 }
 
 export interface BatchDependencies {
@@ -122,6 +125,35 @@ function providerCommentForDiscovery(
   return comment;
 }
 
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function invoiceBindsPaymentDescription(
+  description: string,
+  invoice: {
+    readonly description?: string;
+    readonly descriptionHash?: string;
+  },
+  discovery: LnurlPayDiscovery,
+): boolean {
+  if (invoice.description?.includes(description)) return true;
+  if (!invoice.descriptionHash) return false;
+  if (
+    invoice.descriptionHash ===
+    bytesToHex(sha256(new TextEncoder().encode(description)))
+  )
+    return true;
+  return discovery.metadataEntries.some(
+    (entry) =>
+      (entry[0] === "text/plain" || entry[0] === "text/long-desc") &&
+      typeof entry[1] === "string" &&
+      entry[1].includes(description),
+  );
+}
+
 export async function generateInvoiceBatch(
   input: GenerateInvoiceBatchInput,
   dependencies: BatchDependencies,
@@ -136,6 +168,8 @@ export async function generateInvoiceBatch(
   const invoices = new Set<string>(input.excludedInvoices ?? []);
   const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
   const commentStatuses: ProviderCommentStatus[] = [];
+  const descriptionStatuses: Exclude<PaymentDescriptionStatus, "partial">[] =
+    [];
   let deferRemaining = false;
 
   for (const [index, slot] of input.slots.entries()) {
@@ -218,6 +252,16 @@ export async function generateInvoiceBatch(
         commentStatuses.push(
           callback.commentSent ? "forwarded" : "unsupported",
         );
+      if (input.providerComment !== undefined)
+        descriptionStatuses.push(
+          invoiceBindsPaymentDescription(
+            input.providerComment,
+            validated,
+            slotDiscovery,
+          )
+            ? "embedded"
+            : "notEmbedded",
+        );
       if (callback.disposable && index < input.slots.length - 1)
         deferRemaining = true;
     } catch (error) {
@@ -237,11 +281,22 @@ export async function generateInvoiceBatch(
         : commentStatuses.every((status) => status === "unsupported")
           ? ("unsupported" as const)
           : ("partial" as const);
+  const paymentDescriptionStatus =
+    input.providerComment === undefined || descriptionStatuses.length === 0
+      ? undefined
+      : descriptionStatuses.every((status) => status === "embedded")
+        ? ("embedded" as const)
+        : descriptionStatuses.every((status) => status === "notEmbedded")
+          ? ("notEmbedded" as const)
+          : ("partial" as const);
   return Object.freeze({
     discovery,
     slots: Object.freeze(results),
     completedCount,
     failedCount,
     ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
+    ...(paymentDescriptionStatus === undefined
+      ? {}
+      : { paymentDescriptionStatus }),
   });
 }

@@ -2,6 +2,7 @@ import type { PriceSnapshotDto } from "../api/serialization";
 import type {
   InputMode,
   PaymentAnnotation,
+  PaymentDescriptionStatus,
   ProviderCommentStatus,
 } from "../domain/models";
 
@@ -59,6 +60,7 @@ export interface SettlementSession {
   readonly payerShareKrw?: string;
   readonly payerShareSats?: string;
   readonly providerCommentStatus?: ProviderCommentStatus;
+  readonly paymentDescriptionStatus?: PaymentDescriptionStatus;
   readonly createdAt: string;
   readonly providerDomain?: string;
   readonly issuedPaymentHashes?: readonly string[];

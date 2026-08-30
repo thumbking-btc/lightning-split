@@ -52,6 +52,7 @@ export function createTestBolt11(options: {
   readonly fixtureId: string;
   readonly timestamp?: number;
   readonly expirySeconds?: number;
+  readonly description?: string;
   readonly descriptionHashSource?: string;
   readonly includeFallback?: boolean;
 }): { readonly invoice: string; readonly paymentHash: string } {
@@ -63,7 +64,9 @@ export function createTestBolt11(options: {
   const paymentSecret = sha256(
     new TextEncoder().encode(`secret:${options.fixtureId}`),
   );
-  const description = new TextEncoder().encode("Lightning Split test invoice");
+  const description = new TextEncoder().encode(
+    options.description ?? "Lightning Split test invoice",
+  );
   const prefix = `lnbc${options.amountSats * 10n}n`;
   const signedWords = [
     ...integerWords(BigInt(timestamp), 7),

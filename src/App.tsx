@@ -352,7 +352,7 @@ export function SettlementHeader({
       <div>
         <span className="eyebrow">LIGHTNING SPLIT</span>
         <h1>{note || "정산 진행 중"}</h1>
-        {note && <small>정산 메모</small>}
+        {note && <small>결제 설명</small>}
       </div>
       <button
         className="text-button touch-target"
@@ -971,21 +971,43 @@ export function App() {
           onNewSettlement={() => void newSettlement()}
         />
         {session.overallNote &&
+          session.paymentDescriptionStatus === "embedded" && (
+            <p className="provider-comment-status" role="status">
+              결제 설명이 실제 BOLT11 설명 또는 설명 해시에 결합되었습니다. 이를
+              보존하는 지갑에서는 거래내역에서도 확인할 수 있습니다.
+            </p>
+          )}
+        {session.overallNote &&
+          session.paymentDescriptionStatus === "partial" && (
+            <div className="global-warning" role="status">
+              일부 결제 요청만 결제 설명을 BOLT11에 포함했습니다. invoice별
+              거래내역 표시는 다를 수 있습니다.
+            </div>
+          )}
+        {session.overallNote &&
+          session.paymentDescriptionStatus === "notEmbedded" && (
+            <div className="global-warning" role="status">
+              이 provider가 발급한 BOLT11에는 결제 설명이 포함되지 않았습니다.
+              지갑 거래내역에는 표시되지 않을 수 있습니다.
+            </div>
+          )}
+        {session.overallNote &&
+          session.paymentDescriptionStatus === undefined &&
           session.providerCommentStatus === "forwarded" && (
             <p className="provider-comment-status" role="status">
-              정산 메모를 지원되는 각 지갑 callback에 전달했습니다.
+              결제 설명을 지원되는 각 지갑 callback에 전달했습니다.
             </p>
           )}
         {session.overallNote && session.providerCommentStatus === "partial" && (
           <div className="global-warning" role="status">
-            일부 결제 요청에만 지갑 메모를 전달했습니다. 나머지는 이 기기에
+            일부 결제 요청에만 결제 설명을 전달했습니다. 나머지는 이 기기에
             저장했습니다.
           </div>
         )}
         {session.overallNote &&
           session.providerCommentStatus === "unsupported" && (
             <div className="global-warning" role="status">
-              이 주소는 지갑 메모 전달을 지원하지 않아 정산 메모를 이 기기에만
+              이 주소는 메모 전달을 지원하지 않아 결제 설명을 이 기기에만
               저장했습니다.
             </div>
           )}
@@ -1181,10 +1203,10 @@ export function App() {
         </label>
         <details className="optional-fields">
           <summary>
-            메모와 참여자 이름 추가 <span>선택</span>
+            결제 설명과 참여자 이름 추가 <span>선택</span>
           </summary>
           <label className="stacked-field">
-            정산 메모
+            결제 설명
             <input
               value={overallNote}
               onChange={(event) => setOverallNote(event.target.value)}
@@ -1196,7 +1218,8 @@ export function App() {
             <small>
               {[...overallNote].length}/
               {DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters}자 ·
-              지원하는 지갑에는 결제 메모로도 전달됩니다.
+              LUD-12 지원 provider에는 전달합니다. 거래내역 표시는 실제 BOLT11
+              포함 여부와 지갑 구현에 따라 달라집니다.
             </small>
           </label>
           <label className="stacked-field">

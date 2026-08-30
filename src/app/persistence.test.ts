@@ -125,6 +125,7 @@ describe("local settlement persistence", () => {
     const queued: SettlementSession = {
       ...SESSION,
       providerCommentStatus: "partial",
+      paymentDescriptionStatus: "partial",
       slots: [
         {
           slotNumber: 1,

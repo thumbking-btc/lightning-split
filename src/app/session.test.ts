@@ -169,6 +169,7 @@ describe("mobile settlement session", () => {
         provider: {
           domain: "wallet.example",
           commentAllowed,
+          descriptionStatus: "notEmbedded",
           automaticSettlementAvailable: false,
         },
         slots: [
@@ -189,6 +190,7 @@ describe("mobile settlement session", () => {
       });
 
       expect(applied.providerCommentStatus).toBe(expectedStatus);
+      expect(applied.paymentDescriptionStatus).toBe("notEmbedded");
     },
   );
 

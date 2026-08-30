@@ -1,5 +1,6 @@
 export type InputMode = "krw" | "sats";
 export type ProviderCommentStatus = "forwarded" | "unsupported" | "partial";
+export type PaymentDescriptionStatus = "embedded" | "notEmbedded" | "partial";
 export type InvoiceSlotStatus =
   | "generating"
   | "deferred"
@@ -146,6 +147,7 @@ interface SettlementBatchBase {
   readonly slots: readonly InvoiceSlot[];
   readonly overallNote?: string;
   readonly providerCommentStatus?: ProviderCommentStatus;
+  readonly paymentDescriptionStatus?: PaymentDescriptionStatus;
   readonly participantNameCandidates: readonly ParticipantNameCandidate[];
   readonly createdAt: string;
 }

@@ -283,6 +283,12 @@ describe("Lightning Split Worker API", () => {
     );
 
     expect(response.status).toBe(200);
+    await expect(response.clone().json()).resolves.toMatchObject({
+      provider: {
+        commentStatus: "forwarded",
+        descriptionStatus: "notEmbedded",
+      },
+    });
     expect(comments).toEqual(["8/30 고깃집 저녁", "8/30 고깃집 저녁"]);
   });
 

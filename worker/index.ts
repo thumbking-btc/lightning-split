@@ -239,6 +239,9 @@ async function handleInvoices(
       ...(result.providerCommentStatus === undefined
         ? {}
         : { commentStatus: result.providerCommentStatus }),
+      ...(result.paymentDescriptionStatus === undefined
+        ? {}
+        : { descriptionStatus: result.paymentDescriptionStatus }),
       automaticSettlementAvailable: slots.some(
         (slot) =>
           slot.status === "pending" &&

@@ -32,12 +32,12 @@ describe("v1 mobile accessibility states", () => {
     expect(html).not.toContain('value="86000"');
   });
 
-  it("keeps the settlement note visible in the result header", () => {
+  it("keeps the payment description visible in the result header", () => {
     const html = renderToStaticMarkup(
       <SettlementHeader note="8/30 고깃집 저녁" onNewSettlement={vi.fn()} />,
     );
     expect(html).toContain("8/30 고깃집 저녁");
-    expect(html).toContain("정산 메모");
+    expect(html).toContain("결제 설명");
   });
 
   it("shows sats-specific group-cost and receivable labels without KRW wording", () => {

@@ -124,7 +124,7 @@ describe("sequential invoice batch generation", () => {
       { ...DISCOVERY, commentAllowed: 255 },
     );
 
-    await generateInvoiceBatch(
+    const result = await generateInvoiceBatch(
       {
         address: "user@wallet.example",
         slots: slots(3),
@@ -137,6 +137,84 @@ describe("sequential invoice batch generation", () => {
     for (const callbackCall of mock.callback.mock.calls) {
       expect(callbackCall[2]).toEqual({ comment: "8/30 고깃집 저녁" });
     }
+    expect(result.providerCommentStatus).toBe("forwarded");
+    expect(result.paymentDescriptionStatus).toBe("notEmbedded");
+  });
+
+  it("detects when the provider embeds the payment description in BOLT11", async () => {
+    const description = "8/30 고깃집 저녁";
+    const direct = clientWith(
+      (_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: "description-direct",
+            description,
+          }).invoice,
+        }),
+      { ...DISCOVERY, commentAllowed: 255 },
+    );
+    const directResult = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(1),
+        providerComment: description,
+      },
+      { client: direct.client, now: () => NOW_SECONDS * 1_000 },
+    );
+    expect(directResult.paymentDescriptionStatus).toBe("embedded");
+
+    const metadata = `[["text/plain","${description}"]]`;
+    const hashed = clientWith(
+      (_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: "description-hash",
+            descriptionHashSource: metadata,
+          }).invoice,
+        }),
+      {
+        ...DISCOVERY,
+        metadata,
+        metadataEntries: [["text/plain", description]],
+        commentAllowed: 255,
+      },
+    );
+    const hashedResult = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(1),
+        providerComment: description,
+      },
+      { client: hashed.client, now: () => NOW_SECONDS * 1_000 },
+    );
+    expect(hashedResult.paymentDescriptionStatus).toBe("embedded");
+  });
+
+  it("reports partial BOLT11 description binding per invoice", async () => {
+    const description = "8/30 고깃집 저녁";
+    let call = 0;
+    const mock = clientWith(
+      (_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: `description-partial-${++call}`,
+            ...(call === 1 ? { description } : {}),
+          }).invoice,
+        }),
+      { ...DISCOVERY, commentAllowed: 255 },
+    );
+    const result = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(2),
+        providerComment: description,
+      },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+    expect(result.paymentDescriptionStatus).toBe("partial");
   });
 
   it("continues without a provider comment when comments are unsupported", async () => {

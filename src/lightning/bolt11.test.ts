@@ -20,6 +20,8 @@ describe("validateBolt11Invoice", () => {
     expect(result.amountSats).toBe(1_000n);
     expect(result.payeeNodeId).toHaveLength(66);
     expect(result.expiresAt).toBe(1_900_003_600);
+    expect(result.description).toBe("Lightning Split test invoice");
+    expect(result.descriptionHash).toBeUndefined();
   });
 
   it("rejects an amount mismatch", () => {
@@ -63,13 +65,14 @@ describe("validateBolt11Invoice", () => {
       descriptionHashSource: '[["text/plain","recipient"]]',
       includeFallback: true,
     });
-    expect(
-      validateBolt11Invoice(fixture.invoice, {
-        expectedSats: 1_000n,
-        expectedDescription: '[["text/plain","recipient"]]',
-        nowSeconds,
-      }).paymentHash,
-    ).toBe(fixture.paymentHash);
+    const validated = validateBolt11Invoice(fixture.invoice, {
+      expectedSats: 1_000n,
+      expectedDescription: '[["text/plain","recipient"]]',
+      nowSeconds,
+    });
+    expect(validated.paymentHash).toBe(fixture.paymentHash);
+    expect(validated.description).toBeUndefined();
+    expect(validated.descriptionHash).toHaveLength(64);
     expect(() =>
       validateBolt11Invoice(fixture.invoice, {
         expectedSats: 1_000n,

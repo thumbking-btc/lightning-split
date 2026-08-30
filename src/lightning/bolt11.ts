@@ -136,7 +136,7 @@ function exactlyOne(
 function validateDescription(
   fields: ReadonlyMap<string, number[][]>,
   expectedDescription?: string,
-): void {
+): { readonly description?: string; readonly descriptionHash?: string } {
   const descriptions = fields.get("d") ?? [];
   const hashes = fields.get("h") ?? [];
   if (
@@ -154,9 +154,10 @@ function validateDescription(
     return fail("DESCRIPTION", "Invalid description hash.");
   if (hash) {
     const decodedHash = wordsToBytesStrict(hash);
+    const descriptionHash = bytesToHex(decodedHash);
     if (
       expectedDescription !== undefined &&
-      bytesToHex(decodedHash) !==
+      descriptionHash !==
         bytesToHex(sha256(new TextEncoder().encode(expectedDescription)))
     ) {
       return fail(
@@ -164,6 +165,7 @@ function validateDescription(
         "Invoice description hash does not match LNURL metadata.",
       );
     }
+    return { descriptionHash };
   }
   const description = descriptions[0];
   if (description) {
@@ -171,11 +173,17 @@ function validateDescription(
     if (bytes.length > 639)
       return fail("DESCRIPTION", "Description is too long.");
     try {
-      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+      return {
+        description: new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: false,
+        }).decode(bytes),
+      };
     } catch {
       return fail("DESCRIPTION", "Description is not valid UTF-8.");
     }
   }
+  return fail("DESCRIPTION", "Invoice description is missing.");
 }
 
 function setFeatureBits(words: readonly number[]): number[] {
@@ -271,6 +279,8 @@ export interface ValidatedBolt11Invoice {
   readonly payeeNodeId: string;
   readonly paymentHash: string;
   readonly timestamp: number;
+  readonly description?: string;
+  readonly descriptionHash?: string;
 }
 
 export function validateBolt11Invoice(
@@ -337,7 +347,7 @@ export function validateBolt11Invoice(
   wordsToBytesStrict(
     exactlyOne(fields, "s", 52, "One payment secret is required."),
   );
-  validateDescription(fields, options.expectedDescription);
+  const description = validateDescription(fields, options.expectedDescription);
   const payees = fields.get("n") ?? [];
   if (payees.length > 1 || (payees[0] && payees[0].length !== 53))
     return fail("PAYEE", "Invalid payee tag.");
@@ -376,5 +386,6 @@ export function validateBolt11Invoice(
     payeeNodeId: bytesToHex(payeeNodeId),
     paymentHash: bytesToHex(wordsToBytesStrict(paymentHashWords)),
     timestamp,
+    ...description,
   });
 }

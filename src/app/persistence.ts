@@ -138,6 +138,10 @@ function isSettlementSession(value: unknown): value is SettlementSession {
       value.providerCommentStatus === "forwarded" ||
       value.providerCommentStatus === "unsupported" ||
       value.providerCommentStatus === "partial") &&
+    (value.paymentDescriptionStatus === undefined ||
+      value.paymentDescriptionStatus === "embedded" ||
+      value.paymentDescriptionStatus === "notEmbedded" ||
+      value.paymentDescriptionStatus === "partial") &&
     (value.providerDomain === undefined ||
       typeof value.providerDomain === "string") &&
     isStoredPaymentHashList(value.issuedPaymentHashes) &&

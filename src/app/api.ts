@@ -230,6 +230,10 @@ export async function requestInvoiceBatch(
       value.provider.commentStatus !== "forwarded" &&
       value.provider.commentStatus !== "unsupported" &&
       value.provider.commentStatus !== "partial") ||
+    (value.provider.descriptionStatus !== undefined &&
+      value.provider.descriptionStatus !== "embedded" &&
+      value.provider.descriptionStatus !== "notEmbedded" &&
+      value.provider.descriptionStatus !== "partial") ||
     typeof value.provider.automaticSettlementAvailable !== "boolean" ||
     !Array.isArray(value.slots) ||
     typeof value.completedCount !== "number" ||
@@ -257,6 +261,11 @@ export async function requestInvoiceBatch(
       value.provider.commentStatus === "unsupported" ||
       value.provider.commentStatus === "partial"
         ? { commentStatus: value.provider.commentStatus }
+        : {}),
+      ...(value.provider.descriptionStatus === "embedded" ||
+      value.provider.descriptionStatus === "notEmbedded" ||
+      value.provider.descriptionStatus === "partial"
+        ? { descriptionStatus: value.provider.descriptionStatus }
         : {}),
       automaticSettlementAvailable: value.provider.automaticSettlementAvailable,
     },

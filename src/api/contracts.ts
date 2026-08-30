@@ -85,6 +85,7 @@ export interface BatchInvoiceResponseDto {
     readonly domain: string;
     readonly commentAllowed: number;
     readonly commentStatus?: "forwarded" | "unsupported" | "partial";
+    readonly descriptionStatus?: "embedded" | "notEmbedded" | "partial";
     readonly automaticSettlementAvailable: boolean;
   };
   readonly slots: readonly (

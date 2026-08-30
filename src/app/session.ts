@@ -9,8 +9,12 @@ import {
   createSatsSplitPlan,
   sumAmounts,
 } from "../domain/money";
-import type { InputMode, PaymentAnnotation } from "../domain/models";
-import type { ProviderCommentStatus } from "../domain/models";
+import type {
+  InputMode,
+  PaymentAnnotation,
+  PaymentDescriptionStatus,
+  ProviderCommentStatus,
+} from "../domain/models";
 import { createLocalSettlementId } from "./localId";
 import type {
   ClientSlot,
@@ -46,6 +50,15 @@ function mergeProviderCommentStatus(
   current: ProviderCommentStatus | undefined,
   next: ProviderCommentStatus | undefined,
 ): ProviderCommentStatus | undefined {
+  if (next === undefined) return current;
+  if (current === undefined || current === next) return next;
+  return "partial";
+}
+
+function mergePaymentDescriptionStatus(
+  current: PaymentDescriptionStatus | undefined,
+  next: PaymentDescriptionStatus | undefined,
+): PaymentDescriptionStatus | undefined {
   if (next === undefined) return current;
   if (current === undefined || current === next) return next;
   return "partial";
@@ -177,10 +190,19 @@ export function applyBatchResponse(
         inferProviderCommentStatus(response),
       )
     : undefined;
+  const paymentDescriptionStatus = session.overallNote
+    ? mergePaymentDescriptionStatus(
+        session.paymentDescriptionStatus,
+        response.provider.descriptionStatus,
+      )
+    : undefined;
   return {
     ...session,
     providerDomain: response.provider.domain,
     ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
+    ...(paymentDescriptionStatus === undefined
+      ? {}
+      : { paymentDescriptionStatus }),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       response.slots.flatMap((slot) =>
@@ -282,10 +304,19 @@ export function applySlotRetryResponse(
         inferProviderCommentStatus(response),
       )
     : undefined;
+  const paymentDescriptionStatus = session.overallNote
+    ? mergePaymentDescriptionStatus(
+        session.paymentDescriptionStatus,
+        response.provider.descriptionStatus,
+      )
+    : undefined;
   return {
     ...session,
     providerDomain: response.provider.domain,
     ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
+    ...(paymentDescriptionStatus === undefined
+      ? {}
+      : { paymentDescriptionStatus }),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       excludedPaymentHashes,
