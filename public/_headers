@@ -12,3 +12,6 @@
 
 /build.json
   Cache-Control: no-store, max-age=0, must-revalidate
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
