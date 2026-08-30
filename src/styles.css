@@ -414,6 +414,25 @@ button {
 .wide-preview-item {
   grid-column: 1 / -1;
 }
+.app-version {
+  width: min(100%, 480px);
+  margin: -0.5rem auto 1.25rem;
+  padding: 0 1rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  text-align: center;
+}
+.app-version button {
+  margin-left: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #d7ccb9;
+  border-radius: 0.55rem;
+  color: var(--ink);
+  background: #fffdf8;
+  font: inherit;
+  font-weight: 700;
+}
 .preview-note,
 .privacy-note,
 .swipe-hint,

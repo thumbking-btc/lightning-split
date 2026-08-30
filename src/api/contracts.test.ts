@@ -4,14 +4,18 @@ import { parseBatchInvoiceRequest, parseSettlementRequest } from "./contracts";
 
 describe("Worker API DTO validation", () => {
   it("parses decimal-string amounts without Number conversion", () => {
-    expect(
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        slots: [
-          { slotNumber: 1, krwShare: "21500", targetSats: "13438", attempt: 1 },
-        ],
-      }).slots[0],
-    ).toMatchObject({ krwShare: 21_500n, targetSats: 13_438n });
+    const parsed = parseBatchInvoiceRequest({
+      address: "user@wallet.example",
+      capabilities: { deferredSlots: true },
+      slots: [
+        { slotNumber: 1, krwShare: "21500", targetSats: "13438", attempt: 1 },
+      ],
+    });
+    expect(parsed.slots[0]).toMatchObject({
+      krwShare: 21_500n,
+      targetSats: 13_438n,
+    });
+    expect(parsed.supportsDeferredSlots).toBe(true);
   });
 
   it("rejects JSON numbers, zero values and oversized batches", () => {
@@ -76,6 +80,14 @@ describe("Worker API DTO validation", () => {
       slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
     });
     expect(withoutComment.providerComment).toBeUndefined();
+    expect(withoutComment.supportsDeferredSlots).toBe(false);
+    expect(() =>
+      parseBatchInvoiceRequest({
+        address: "user@wallet.example",
+        capabilities: { deferredSlots: "yes" },
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+      }),
+    ).toThrowError();
   });
 
   it("accepts at most 255 provider-comment characters", () => {

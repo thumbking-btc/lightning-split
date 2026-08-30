@@ -198,7 +198,20 @@ async function handleInvoices(
         if (slot.status === "failed") {
           return { ...base, status: "failed", failure: slot.failure };
         }
-        if (slot.status === "deferred") return { ...base, status: "deferred" };
+        if (slot.status === "deferred") {
+          return input.supportsDeferredSlots
+            ? { ...base, status: "deferred" }
+            : {
+                ...base,
+                status: "failed",
+                failure: {
+                  code: "INVOICE_DEFERRED",
+                  message:
+                    "앞 결제를 완료한 뒤 이 결제 요청을 다시 만드십시오.",
+                  retryable: true,
+                },
+              };
+        }
         const verificationToken = slot.invoice.verifyUrl
           ? await sealVerificationContext(
               {
@@ -250,7 +263,7 @@ async function handleInvoices(
     },
     slots,
     completedCount: result.completedCount,
-    failedCount: result.failedCount,
+    failedCount: slots.filter((slot) => slot.status === "failed").length,
   };
   return jsonResponse(body);
 }

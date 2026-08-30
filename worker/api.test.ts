@@ -226,6 +226,7 @@ describe("Lightning Split Worker API", () => {
     const { response } = await callWorker(
       apiRequest("/api/invoices", {
         address: "user@wallet.example",
+        capabilities: { deferredSlots: true },
         slots: [1, 2, 3].map((slotNumber) => ({
           slotNumber,
           krwShare: "21500",
@@ -313,6 +314,7 @@ describe("Lightning Split Worker API", () => {
     const { response } = await callWorker(
       apiRequest("/api/invoices", {
         address: "user@wallet.example",
+        capabilities: { deferredSlots: true },
         slots: [1, 2, 3].map((slotNumber) => ({
           slotNumber,
           targetSats: "1000",
@@ -329,6 +331,51 @@ describe("Lightning Split Worker API", () => {
         { status: "pending", slotNumber: 1 },
         { status: "deferred", slotNumber: 2 },
         { status: "deferred", slotNumber: 3 },
+      ],
+    });
+    expect(callbackCount).toBe(1);
+  });
+
+  it("keeps deferred invoice batches parseable by an older cached PWA", async () => {
+    mockDiscovery();
+    let callbackCount = 0;
+    network.use(
+      http.get(CALLBACK_URL, ({ request }) => {
+        callbackCount += 1;
+        const amountSats =
+          BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: "worker-legacy-deferred",
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+        });
+      }),
+    );
+
+    const { response } = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [1, 2].map((slotNumber) => ({
+          slotNumber,
+          targetSats: "1000",
+          attempt: 1,
+        })),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      completedCount: 1,
+      failedCount: 1,
+      slots: [
+        { status: "pending", slotNumber: 1 },
+        {
+          status: "failed",
+          slotNumber: 2,
+          failure: { code: "INVOICE_DEFERRED", retryable: true },
+        },
       ],
     });
     expect(callbackCount).toBe(1);

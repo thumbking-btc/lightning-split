@@ -434,11 +434,13 @@ export function SettlementPreviewDetails({
   totalAmount,
   totalPeople,
   preview,
+  priceSnapshotAt,
 }: {
   readonly inputMode: InputMode;
   readonly totalAmount: string;
   readonly totalPeople: number;
   readonly preview: SettlementPreview;
+  readonly priceSnapshotAt?: string;
 }) {
   const receivableSats = preview.targetSats.reduce(
     (sum, amount) => sum + amount,
@@ -495,6 +497,12 @@ export function SettlementPreviewDetails({
             <strong>{formatInteger(receivableSats)} sats</strong>
           </div>
         </>
+      )}
+      {inputMode === "krw" && priceSnapshotAt && (
+        <div className="wide-preview-item">
+          <span>가격 확인 시각</span>
+          <strong>{new Date(priceSnapshotAt).toLocaleString("ko-KR")}</strong>
+        </div>
       )}
     </div>
   );
@@ -1268,17 +1276,10 @@ export function App() {
               totalAmount={totalAmount}
               totalPeople={totalPeople}
               preview={preview.value}
+              {...(inputMode === "krw" && priceSnapshot
+                ? { priceSnapshotAt: priceSnapshot.snapshotAt }
+                : {})}
             />
-            {inputMode === "krw" && priceSnapshot && (
-              <div className="preview-grid">
-                <div className="wide-preview-item">
-                  <span>가격 확인 시각</span>
-                  <strong>
-                    {new Date(priceSnapshot.snapshotAt).toLocaleString("ko-KR")}
-                  </strong>
-                </div>
-              </div>
-            )}
             <p className="preview-note">
               {inputMode === "krw"
                 ? "정산 시작 시 가격을 한 번 더 확인해 고정하며 이후 결제 금액은 바뀌지 않습니다."

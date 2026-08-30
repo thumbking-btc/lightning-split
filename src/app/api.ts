@@ -217,7 +217,10 @@ export async function requestInvoiceBatch(
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        capabilities: { deferredSlots: true },
+      }),
     }),
   );
   if (

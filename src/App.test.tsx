@@ -65,6 +65,27 @@ describe("v1 mobile accessibility states", () => {
     expect(html).not.toContain("직접 입력 기준");
   });
 
+  it("keeps the KRW snapshot card in the same responsive grid row flow", () => {
+    const html = renderToStaticMarkup(
+      <SettlementPreviewDetails
+        inputMode="krw"
+        totalAmount="300"
+        totalPeople={3}
+        priceSnapshotAt="2026-08-30T04:40:23.000Z"
+        preview={{
+          invoiceShares: [100n, 100n],
+          targetSats: [92n, 92n],
+          invoiceCount: 2,
+          payerShareKrw: 100n,
+          payerShareSats: null,
+        }}
+      />,
+    );
+    expect(html.match(/class="preview-grid"/gu)).toHaveLength(1);
+    expect(html).toContain('class="wide-preview-item"');
+    expect(html).toContain("가격 확인 시각");
+  });
+
   it("gives live market price and premium a clear non-technical status", () => {
     const html = renderToStaticMarkup(
       <MarketSummary

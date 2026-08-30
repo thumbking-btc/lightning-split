@@ -27,6 +27,9 @@ export interface PriceResponseDto {
 
 export interface BatchInvoiceRequestDto {
   readonly address: string;
+  readonly capabilities?: {
+    readonly deferredSlots: boolean;
+  };
   readonly slots: readonly {
     readonly slotNumber: number;
     readonly krwShare?: string;
@@ -126,6 +129,7 @@ export function parseBatchInvoiceRequest(value: unknown): {
   readonly excludedPaymentHashes: readonly string[];
   readonly excludedInvoices: readonly string[];
   readonly providerComment?: string;
+  readonly supportsDeferredSlots: boolean;
 } {
   if (
     !isRecord(value) ||
@@ -229,11 +233,20 @@ export function parseBatchInvoiceRequest(value: unknown): {
       "providerComment is invalid.",
     );
   }
+  if (
+    value.capabilities !== undefined &&
+    (!isRecord(value.capabilities) ||
+      typeof value.capabilities.deferredSlots !== "boolean")
+  ) {
+    throw new InfrastructureError("INVALID_INPUT", "capabilities is invalid.");
+  }
   return Object.freeze({
     address: value.address,
     slots: Object.freeze(slots),
     excludedPaymentHashes,
     excludedInvoices,
+    supportsDeferredSlots:
+      isRecord(value.capabilities) && value.capabilities.deferredSlots === true,
     ...(typeof value.providerComment === "string"
       ? { providerComment: value.providerComment }
       : {}),
