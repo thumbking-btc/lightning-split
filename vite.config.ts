@@ -47,13 +47,7 @@ export default defineConfig({
     VitePWA({
       registerType: "prompt",
       filename: "app-sw.js",
-      includeAssets: [
-        "lightning-split.svg",
-        "icon-192.png",
-        "icon-512.png",
-        "icon-maskable-512.png",
-        "apple-touch-icon.png",
-      ],
+      includeAssets: ["lightning-split.png"],
       workbox: {
         globIgnores: ["**/build.json"],
       },
@@ -68,22 +62,10 @@ export default defineConfig({
         start_url: "/",
         icons: [
           {
-            src: "/icon-192.png",
-            sizes: "192x192",
+            src: "/lightning-split.png",
+            sizes: "1254x1254",
             type: "image/png",
-            purpose: "any",
-          },
-          {
-            src: "/icon-512.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "any",
-          },
-          {
-            src: "/icon-maskable-512.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
+            purpose: "any maskable",
           },
         ],
       },
