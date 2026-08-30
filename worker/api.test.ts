@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_LIGHTNING_POLICY } from "../src/config/policies";
 import { createTestBolt11 } from "../src/test/bolt11-fixture";
 import worker, { handleApiRequest } from "./index";
 import { network } from "./test/network";
@@ -517,7 +518,51 @@ describe("Lightning Split Worker API", () => {
     });
   });
 
-  it("returns expired from authenticated token context without provider access", async () => {
+  it("performs one final provider verification during the post-expiry grace window", async () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const fixture = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "worker-final-expiry-check",
+      timestamp: Math.floor(now / 1_000),
+      expirySeconds: 3_600,
+    });
+    const verifyUrl = "https://wallet.example/verify/final";
+    const verification = vi.fn(() =>
+      HttpResponse.json({ settled: true, pr: fixture.invoice }),
+    );
+    network.use(http.get(verifyUrl, verification));
+    const token = await sealVerificationContext(
+      {
+        verifyUrl,
+        expectedPaymentHash: fixture.paymentHash,
+        expectedInvoice: fixture.invoice,
+        expiresAt: new Date(now + 1_000).toISOString(),
+      },
+      TEST_SECRET,
+      now,
+    );
+    vi.setSystemTime(now + 2_000);
+
+    const result = await callWorker(
+      apiRequest("/api/settlement", {
+        verificationToken: token,
+        paymentHash: fixture.paymentHash,
+        bolt11: fixture.invoice,
+      }),
+    );
+
+    expect(result.response.status).toBe(200);
+    await expect(result.response.json()).resolves.toMatchObject({
+      ok: true,
+      status: "settled",
+      settled: true,
+    });
+    expect(verification).toHaveBeenCalledOnce();
+  });
+
+  it("returns expired after the final verification grace window without provider access", async () => {
     const now = Date.parse("2030-01-01T00:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -537,7 +582,12 @@ describe("Lightning Split Worker API", () => {
       TEST_SECRET,
       now,
     );
-    vi.setSystemTime(now + 2_000);
+    vi.setSystemTime(
+      now +
+        1_001 +
+        DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds *
+          1_000,
+    );
     const result = await callWorker(
       apiRequest("/api/settlement", {
         verificationToken: token,
@@ -633,7 +683,54 @@ describe("Lightning Split Worker API", () => {
     });
   });
 
-  it("fails closed when verify is offered but the sealing secret is invalid", async () => {
+  it.each([
+    ["missing", undefined],
+    ["invalid", "not-a-32-byte-key"],
+  ] as const)(
+    "preserves a payable invoice when the verification secret is %s",
+    async (label, verificationTokenSecret) => {
+      const allow = { limit: () => Promise.resolve({ success: true }) };
+      mockDiscovery();
+      network.use(
+        http.get(CALLBACK_URL, ({ request }) => {
+          const amountSats =
+            BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
+          return HttpResponse.json({
+            pr: createTestBolt11({
+              amountSats,
+              fixtureId: `worker-verify-${label}-secret`,
+              timestamp: Math.floor(Date.now() / 1_000),
+            }).invoice,
+            verify: "https://wallet.example/verify/one",
+          });
+        }),
+      );
+      const response = await handleApiRequest(
+        apiRequest("/api/invoices", {
+          address: "user@wallet.example",
+          slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        }),
+        {
+          INVOICE_RATE_LIMITER: allow,
+          SETTLEMENT_RATE_LIMITER: allow,
+          ...(verificationTokenSecret === undefined
+            ? {}
+            : { VERIFICATION_TOKEN_SECRET: verificationTokenSecret }),
+        },
+      );
+      const body = (await response.json()) as {
+        provider: { automaticSettlementAvailable: boolean };
+        slots: { status: string; invoice: { verificationToken?: string } }[];
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.provider.automaticSettlementAvailable).toBe(false);
+      expect(body.slots[0]?.status).toBe("pending");
+      expect(body.slots[0]?.invoice.verificationToken).toBeUndefined();
+    },
+  );
+
+  it("preserves a payable invoice when verification token sealing rejects its lifetime", async () => {
     const allow = { limit: () => Promise.resolve({ success: true }) };
     mockDiscovery();
     network.use(
@@ -643,8 +740,9 @@ describe("Lightning Split Worker API", () => {
         return HttpResponse.json({
           pr: createTestBolt11({
             amountSats,
-            fixtureId: "worker-verify-invalid-secret",
+            fixtureId: "worker-verify-token-lifetime",
             timestamp: Math.floor(Date.now() / 1_000),
+            expirySeconds: 32 * 24 * 60 * 60,
           }).invoice,
           verify: "https://wallet.example/verify/one",
         });
@@ -658,13 +756,19 @@ describe("Lightning Split Worker API", () => {
       {
         INVOICE_RATE_LIMITER: allow,
         SETTLEMENT_RATE_LIMITER: allow,
-        VERIFICATION_TOKEN_SECRET: "not-a-32-byte-key",
+        VERIFICATION_TOKEN_SECRET: TEST_SECRET,
       },
     );
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: "CONFIGURATION_ERROR" },
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      provider: { automaticSettlementAvailable: boolean };
+      slots: { status: string; invoice: { verificationToken?: string } }[];
+    };
+    expect(body).toMatchObject({
+      provider: { automaticSettlementAvailable: false },
+      slots: [{ status: "pending" }],
     });
+    expect(body.slots[0]?.invoice.verificationToken).toBeUndefined();
   });
 
   it("rejects cross-origin and malformed DTO requests before provider access", async () => {

@@ -13,6 +13,7 @@ import {
   createSettlementPreview,
   getSettlementProgress,
   manuallyConfirmSlot,
+  markExpiredSlots,
   prepareQueuedSlot,
   prepareSlotRetry,
   type DraftInput,
@@ -83,7 +84,7 @@ describe("mobile settlement session", () => {
     ]);
   });
 
-  it("keeps disposable-provider slots queued until the active invoice finishes", () => {
+  it("advances a restored legacy queued slot only after the active invoice finishes", () => {
     const base: SettlementSession = {
       version: 1,
       id: "queued",
@@ -110,7 +111,6 @@ describe("mobile settlement session", () => {
             payeeNodeId: `02${"11".repeat(32)}`,
             featureBits: [],
             providerDomain: "wallet.example",
-            disposable: true,
           },
         },
         {
@@ -532,5 +532,55 @@ describe("mobile settlement session", () => {
       networkSettledCount: 0,
       manuallyConfirmedCount: 1,
     });
+  });
+
+  it("normalizes legacy expired verification states without losing a late payment check", () => {
+    const draft: DraftInput = {
+      inputMode: "sats",
+      totalAmount: "1000",
+      totalPeople: 2,
+      excludePayer: true,
+      lightningAddress: "user@wallet.example",
+      participantNameCandidates: [],
+    };
+    const generating = createGeneratingSession(
+      draft,
+      createSettlementPreview(draft),
+      undefined,
+    );
+    const legacyExpired: SettlementSession = {
+      ...generating,
+      slots: [
+        {
+          ...generating.slots[0]!,
+          status: "expired",
+          invoice: {
+            bolt11: "lnbc1legacy",
+            paymentHash: "11".repeat(32),
+            timestampSeconds: 1_893_456_000,
+            expirySeconds: 3_600,
+            expiresAt: "2030-01-01T00:00:00.000Z",
+            payeeNodeId: `02${"11".repeat(32)}`,
+            featureBits: [],
+            providerDomain: "wallet.example",
+            verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+          },
+        },
+      ],
+    };
+
+    const inGrace = markExpiredSlots(
+      legacyExpired,
+      Date.parse("2030-01-01T00:00:30.000Z"),
+    );
+    expect(inGrace.slots[0]?.status).toBe("verifyingExpired");
+    expect(inGrace.slots[0]?.invoice?.verificationToken).toBeDefined();
+
+    const afterGrace = markExpiredSlots(
+      legacyExpired,
+      Date.parse("2030-01-01T00:01:00.000Z"),
+    );
+    expect(afterGrace.slots[0]?.status).toBe("expired");
+    expect(afterGrace.slots[0]?.invoice?.verificationToken).toBeUndefined();
   });
 });

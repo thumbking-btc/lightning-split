@@ -176,4 +176,78 @@ describe("PriceSnapshotService", () => {
     });
     expect(primary.fetchObservation).toHaveBeenCalledTimes(1);
   });
+
+  it("treats a cache read failure as a miss", async () => {
+    const primary: PriceSourceAdapter = {
+      source: "upbit",
+      fetchObservation: vi.fn(() =>
+        Promise.resolve({
+          source: "upbit" as const,
+          market: "KRW-BTC" as const,
+          priceKrw: 120_000_000n,
+          observedAtMs: NOW - 500,
+          retrievedAtMs: NOW,
+        }),
+      ),
+    };
+    const fallback: PriceSourceAdapter = {
+      source: "bithumb",
+      fetchObservation: vi.fn(() => Promise.reject(new Error("must not call"))),
+    };
+    const cache: PriceSnapshotCache = {
+      get: vi.fn(() => Promise.reject(new Error("cache unavailable"))),
+      put: vi.fn(() => Promise.resolve()),
+    };
+    const service = new PriceSnapshotService(
+      primary,
+      fallback,
+      cache,
+      DEFAULT_PRICE_POLICY,
+      () => NOW,
+    );
+
+    await expect(service.getSnapshot()).resolves.toMatchObject({
+      source: "upbit",
+      fallbackUsed: false,
+    });
+    expect(primary.fetchObservation).toHaveBeenCalledTimes(1);
+    expect(fallback.fetchObservation).not.toHaveBeenCalled();
+  });
+
+  it("returns a fresh primary snapshot when the cache write fails", async () => {
+    const primary: PriceSourceAdapter = {
+      source: "upbit",
+      fetchObservation: vi.fn(() =>
+        Promise.resolve({
+          source: "upbit" as const,
+          market: "KRW-BTC" as const,
+          priceKrw: 120_000_000n,
+          observedAtMs: NOW - 500,
+          retrievedAtMs: NOW,
+        }),
+      ),
+    };
+    const fallback: PriceSourceAdapter = {
+      source: "bithumb",
+      fetchObservation: vi.fn(() => Promise.reject(new Error("must not call"))),
+    };
+    const cache: PriceSnapshotCache = {
+      get: vi.fn(() => Promise.resolve(null)),
+      put: vi.fn(() => Promise.reject(new Error("cache unavailable"))),
+    };
+    const service = new PriceSnapshotService(
+      primary,
+      fallback,
+      cache,
+      DEFAULT_PRICE_POLICY,
+      () => NOW,
+    );
+
+    await expect(service.getSnapshot()).resolves.toMatchObject({
+      source: "upbit",
+      fallbackUsed: false,
+    });
+    expect(cache.put).toHaveBeenCalledTimes(1);
+    expect(fallback.fetchObservation).not.toHaveBeenCalled();
+  });
 });

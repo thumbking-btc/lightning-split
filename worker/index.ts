@@ -15,6 +15,7 @@ import {
   serializeBigIntDecimal,
   serializePriceSnapshot,
 } from "../src/api/serialization";
+import { DEFAULT_LIGHTNING_POLICY } from "../src/config/policies";
 import { InfrastructureError } from "../src/infrastructure/errors";
 import { generateInvoiceBatch } from "../src/lightning/batch";
 import { LnurlPayClient } from "../src/lightning/lnurl";
@@ -156,17 +157,22 @@ async function handlePrice(): Promise<Response> {
   return jsonResponse(body);
 }
 
+function optionalVerificationSecret(env: AppEnv): string | undefined {
+  return env.VERIFICATION_TOKEN_SECRET &&
+    /^[0-9a-f]{64}$/u.test(env.VERIFICATION_TOKEN_SECRET)
+    ? env.VERIFICATION_TOKEN_SECRET
+    : undefined;
+}
+
 function verificationSecret(env: AppEnv): string {
-  if (
-    !env.VERIFICATION_TOKEN_SECRET ||
-    !/^[0-9a-f]{64}$/u.test(env.VERIFICATION_TOKEN_SECRET)
-  ) {
+  const secret = optionalVerificationSecret(env);
+  if (!secret) {
     throw new InfrastructureError(
       "CONFIGURATION_ERROR",
       "결제 확인 보안 설정이 준비되지 않았습니다.",
     );
   }
-  return env.VERIFICATION_TOKEN_SECRET;
+  return secret;
 }
 
 async function handleInvoices(
@@ -179,7 +185,7 @@ async function handleInvoices(
   const result = await generateInvoiceBatch(input, {
     client: new LnurlPayClient(),
   });
-  let secret: string | undefined;
+  const secret = optionalVerificationSecret(env);
   const slots = await Promise.all(
     result.slots.map(
       async (
@@ -212,17 +218,22 @@ async function handleInvoices(
                 },
               };
         }
-        const verificationToken = slot.invoice.verifyUrl
-          ? await sealVerificationContext(
+        let verificationToken: string | undefined;
+        if (slot.invoice.verifyUrl && secret) {
+          try {
+            verificationToken = await sealVerificationContext(
               {
                 verifyUrl: slot.invoice.verifyUrl,
                 expectedPaymentHash: slot.invoice.paymentHash,
                 expectedInvoice: slot.invoice.bolt11,
                 expiresAt: slot.invoice.expiresAt,
               },
-              (secret ??= verificationSecret(env)),
-            )
-          : undefined;
+              secret,
+            );
+          } catch {
+            // LUD-21 is optional. Keep the payable invoice and omit automation.
+          }
+        }
         return {
           ...base,
           status: "pending",
@@ -280,7 +291,10 @@ async function handleSettlement(
     verificationSecret(env),
   );
   await assertVerificationLink(context, input.paymentHash, input.bolt11);
-  if (context.expiresAtMs <= Date.now()) {
+  const finalVerificationDeadlineMs =
+    context.expiresAtMs +
+    DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds * 1_000;
+  if (finalVerificationDeadlineMs <= Date.now()) {
     const body: SettlementResponseDto = {
       ok: true,
       status: "expired",

@@ -289,7 +289,7 @@ export function applySlotRetryResponse(
     current.status !== "generating" ||
     result.attempt !== current.attempt
   ) {
-    throw new Error("재발급 시도 정보가 일치하지 않습니다.");
+    return session;
   }
   if (
     result.status === "pending" &&
@@ -337,49 +337,132 @@ export function markExpiredSlots(
   session: SettlementSession,
   nowMs = Date.now(),
 ): SettlementSession {
+  const finalVerificationGraceMs =
+    DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds * 1_000;
   let changed = false;
   const slots = session.slots.map((slot): ClientSlot => {
+    if (
+      slot.status === "expired" &&
+      slot.invoice?.verificationToken !== undefined
+    ) {
+      changed = true;
+      const expiresAtMs = Date.parse(slot.invoice.expiresAt);
+      if (nowMs < expiresAtMs) return { ...slot, status: "pending" };
+      if (nowMs < expiresAtMs + finalVerificationGraceMs) {
+        return { ...slot, status: "verifyingExpired" };
+      }
+      const { verificationToken: _verificationToken, ...invoice } =
+        slot.invoice;
+      void _verificationToken;
+      return { ...slot, invoice };
+    }
     if (
       slot.status === "pending" &&
       slot.invoice &&
       Date.parse(slot.invoice.expiresAt) <= nowMs
     ) {
       changed = true;
-      return { ...slot, status: "expired" };
+      if (
+        slot.invoice.verificationToken !== undefined &&
+        nowMs < Date.parse(slot.invoice.expiresAt) + finalVerificationGraceMs
+      ) {
+        return { ...slot, status: "verifyingExpired" };
+      }
+      const { verificationToken: _verificationToken, ...invoice } =
+        slot.invoice;
+      void _verificationToken;
+      return { ...slot, status: "expired", invoice };
+    }
+    if (
+      slot.status === "verifyingExpired" &&
+      slot.invoice &&
+      Date.parse(slot.invoice.expiresAt) + finalVerificationGraceMs <= nowMs
+    ) {
+      changed = true;
+      const { verificationToken: _verificationToken, ...invoice } =
+        slot.invoice;
+      void _verificationToken;
+      return { ...slot, status: "expired", invoice };
     }
     return slot;
   });
   return changed ? { ...session, slots } : session;
 }
 
+export interface SettlementInvoiceIdentity {
+  readonly slotNumber: number;
+  readonly attempt: number;
+  readonly paymentHash: string;
+  readonly verificationToken: string;
+}
+
+function isCurrentVerification(
+  slot: ClientSlot,
+  identity: SettlementInvoiceIdentity,
+): boolean {
+  return (
+    slot.slotNumber === identity.slotNumber &&
+    slot.attempt === identity.attempt &&
+    (slot.status === "pending" || slot.status === "verifyingExpired") &&
+    slot.invoice?.paymentHash === identity.paymentHash &&
+    slot.invoice.verificationToken === identity.verificationToken
+  );
+}
+
 export function applySettlementResponse(
   session: SettlementSession,
-  slotNumber: number,
+  identity: SettlementInvoiceIdentity,
   response: SettlementResponseDto,
   now = new Date(),
 ): SettlementSession {
-  return {
-    ...session,
-    slots: session.slots.map((slot): ClientSlot => {
-      if (slot.slotNumber !== slotNumber || slot.status !== "pending")
-        return slot;
-      if (response.status === "settled" && response.settled) {
-        return {
-          ...slot,
-          status: "settled",
-          settledAt: response.checkedAt ?? now.toISOString(),
-        };
-      }
-      if (response.status === "expired") return { ...slot, status: "expired" };
-      if (response.status === "notAvailable" && slot.invoice) {
-        const { verificationToken: _verificationToken, ...invoice } =
-          slot.invoice;
-        void _verificationToken;
-        return { ...slot, invoice };
-      }
-      return slot;
-    }),
-  };
+  let changed = false;
+  const slots = session.slots.map((slot): ClientSlot => {
+    if (!isCurrentVerification(slot, identity)) return slot;
+    if (response.status === "settled" && response.settled) {
+      changed = true;
+      return {
+        ...slot,
+        status: "settled",
+        settledAt: response.checkedAt ?? now.toISOString(),
+      };
+    }
+    if (response.status === "expired" && slot.invoice) {
+      changed = true;
+      const { verificationToken: _verificationToken, ...invoice } =
+        slot.invoice;
+      void _verificationToken;
+      return { ...slot, status: "expired", invoice };
+    }
+    if (response.status === "notAvailable" && slot.invoice) {
+      changed = true;
+      const { verificationToken: _verificationToken, ...invoice } =
+        slot.invoice;
+      void _verificationToken;
+      return {
+        ...slot,
+        status:
+          Date.parse(invoice.expiresAt) <= now.getTime()
+            ? "expired"
+            : "pending",
+        invoice,
+      };
+    }
+    return slot;
+  });
+  return changed ? { ...session, slots } : session;
+}
+
+export function disableAutomaticVerification(
+  session: SettlementSession,
+  identity: SettlementInvoiceIdentity,
+  now = new Date(),
+): SettlementSession {
+  return applySettlementResponse(
+    session,
+    identity,
+    { ok: true, status: "notAvailable", settled: false },
+    now,
+  );
 }
 
 export function annotateSettledSlot(
@@ -418,7 +501,7 @@ export function manuallyConfirmSlot(
     slots: session.slots.map((slot): ClientSlot => {
       if (slot.slotNumber !== slotNumber) return slot;
       if (
-        slot.status !== "pending" ||
+        (slot.status !== "pending" && slot.status !== "expired") ||
         !slot.invoice ||
         slot.invoice.verificationToken !== undefined
       ) {

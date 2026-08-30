@@ -4,6 +4,7 @@ import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
 import { InfrastructureError } from "../infrastructure/errors";
 import { isRecord } from "../infrastructure/validation";
 import type { InvoiceSlotRequest } from "../lightning/batch";
+import { MAX_BOLT11_LENGTH } from "../lightning/bolt11";
 
 export interface ApiErrorDto {
   readonly ok: false;
@@ -218,7 +219,7 @@ export function parseBatchInvoiceRequest(value: unknown): {
     value.excludedInvoices,
     "excludedInvoices",
     /^lnbc[0123456789acdefghjklmnpqrstuvwxyz]+$/u,
-    1_200,
+    MAX_BOLT11_LENGTH,
     10,
   );
   if (
@@ -263,7 +264,7 @@ export function parseSettlementRequest(value: unknown): SettlementRequestDto {
     typeof value.paymentHash !== "string" ||
     !/^[0-9a-f]{64}$/u.test(value.paymentHash) ||
     typeof value.bolt11 !== "string" ||
-    value.bolt11.length > 1_200 ||
+    value.bolt11.length > MAX_BOLT11_LENGTH ||
     !/^lnbc[0123456789acdefghjklmnpqrstuvwxyz]+$/u.test(value.bolt11)
   ) {
     throw new InfrastructureError(

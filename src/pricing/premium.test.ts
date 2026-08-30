@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   KimchiPremiumService,
   type PremiumReference,
+  type PremiumReferenceAdapter,
   type PremiumReferenceCache,
   UpbitInternationalPremiumAdapter,
 } from "./premium";
@@ -191,5 +192,63 @@ describe("kimchi premium information", () => {
       code: "NETWORK_ERROR",
       retryable: true,
     });
+  });
+
+  it("treats a premium cache read failure as a miss", async () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+    const reference: PremiumReference = {
+      internationalPriceKrw: "140000000",
+      observedAt: new Date(now).toISOString(),
+      retrievedAt: new Date(now).toISOString(),
+    };
+    const adapter: PremiumReferenceAdapter = {
+      fetchReference: vi.fn(() => Promise.resolve(reference)),
+    };
+    const cache: PremiumReferenceCache = {
+      get: vi.fn(() => Promise.reject(new Error("cache unavailable"))),
+      put: vi.fn(() => Promise.resolve()),
+    };
+
+    await expect(
+      new KimchiPremiumService(
+        adapter,
+        cache,
+        undefined,
+        () => now,
+      ).getInformation(142_800_000n),
+    ).resolves.toMatchObject({
+      basisPoints: 200n,
+      referencePriceKrw: 140_000_000n,
+    });
+    expect(adapter.fetchReference).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns premium information when the cache write fails", async () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+    const reference: PremiumReference = {
+      internationalPriceKrw: "140000000",
+      observedAt: new Date(now).toISOString(),
+      retrievedAt: new Date(now).toISOString(),
+    };
+    const adapter: PremiumReferenceAdapter = {
+      fetchReference: vi.fn(() => Promise.resolve(reference)),
+    };
+    const cache: PremiumReferenceCache = {
+      get: vi.fn(() => Promise.resolve(null)),
+      put: vi.fn(() => Promise.reject(new Error("cache unavailable"))),
+    };
+
+    await expect(
+      new KimchiPremiumService(
+        adapter,
+        cache,
+        undefined,
+        () => now,
+      ).getInformation(142_800_000n),
+    ).resolves.toMatchObject({
+      basisPoints: 200n,
+      referencePriceKrw: 140_000_000n,
+    });
+    expect(cache.put).toHaveBeenCalledTimes(1);
   });
 });

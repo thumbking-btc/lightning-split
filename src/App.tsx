@@ -11,6 +11,7 @@ import { parseParticipantNameCandidates } from "./app/nameCandidates";
 import {
   clearActiveSession,
   loadActiveSession,
+  recoverInterruptedSession,
   saveActiveSession,
 } from "./app/persistence";
 import { QrCode } from "./app/QrCode";
@@ -93,6 +94,8 @@ function slotStatus(slot: ClientSlot): { label: string; tone: string } {
     return { label: "결제 요청 생성 중", tone: "working" };
   if (slot.status === "queued")
     return { label: "앞 결제 완료 후 생성", tone: "muted" };
+  if (slot.status === "verifyingExpired")
+    return { label: "최종 결제 확인 중", tone: "working" };
   if (slot.status === "settled") return { label: "결제 완료", tone: "done" };
   if (slot.status === "manuallyConfirmed")
     return { label: "사용자 확인", tone: "manual" };
@@ -174,26 +177,28 @@ export function InvoiceCard({
         </p>
       )}
 
-      {slot.invoice && slot.status !== "expired" && (
-        <>
-          <div className="qr-shell">
-            <QrCode invoice={slot.invoice.bolt11} />
-          </div>
-          <button
-            className="secondary-button full"
-            type="button"
-            onClick={() => void copyInvoice()}
-          >
-            결제 요청 복사
-          </button>
-          <div className="copy-feedback" aria-live="polite">
-            {copyFeedback}
-          </div>
-          {slot.status === "pending" && (
-            <ExpiryCountdown expiresAt={slot.invoice.expiresAt} />
-          )}
-        </>
-      )}
+      {slot.invoice &&
+        slot.status !== "expired" &&
+        slot.status !== "verifyingExpired" && (
+          <>
+            <div className="qr-shell">
+              <QrCode invoice={slot.invoice.bolt11} />
+            </div>
+            <button
+              className="secondary-button full"
+              type="button"
+              onClick={() => void copyInvoice()}
+            >
+              결제 요청 복사
+            </button>
+            <div className="copy-feedback" aria-live="polite">
+              {copyFeedback}
+            </div>
+            {slot.status === "pending" && (
+              <ExpiryCountdown expiresAt={slot.invoice.expiresAt} />
+            )}
+          </>
+        )}
 
       {slot.status === "generating" && (
         <div className="loading-panel" aria-live="polite">
@@ -203,6 +208,11 @@ export function InvoiceCard({
       {slot.status === "queued" && (
         <div className="loading-panel" aria-live="polite">
           앞 결제 요청이 끝나면 이 결제만 새로 발급합니다.
+        </div>
+      )}
+      {slot.status === "verifyingExpired" && (
+        <div className="loading-panel" aria-live="polite">
+          만료 직전 결제가 있었는지 최종 확인하고 있습니다.
         </div>
       )}
       {slot.status === "failed" && (
@@ -223,6 +233,15 @@ export function InvoiceCard({
         <div className="expired-panel">
           <strong>이 QR은 만료되었습니다.</strong>
           <span>다른 결제는 유지하고 이 결제만 새로 만들 수 있습니다.</span>
+          {slot.invoice && !slot.invoice.verificationToken && (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => onManualConfirm(slot.slotNumber)}
+            >
+              이미 받은 결제로 표시
+            </button>
+          )}
           <button
             className="secondary-button"
             type="button"
@@ -237,7 +256,7 @@ export function InvoiceCard({
         slot.invoice &&
         !slot.invoice.verificationToken && (
           <div className="manual-panel">
-            <strong>자동 결제 확인을 지원하지 않는 주소입니다.</strong>
+            <strong>자동 결제 확인을 사용할 수 없습니다.</strong>
             <span>실제 입금을 직접 확인한 뒤에만 표시하십시오.</span>
             <button
               className="secondary-button"
@@ -447,59 +466,61 @@ export function SettlementPreviewDetails({
     0n,
   );
   return (
-    <div className="preview-grid">
-      <div>
-        <span>총 금액</span>
-        <strong>
-          {totalAmount ? formatInteger(BigInt(totalAmount)) : "0"}
-          {inputMode === "krw" ? "원" : " sats"}
-        </strong>
-      </div>
-      <div>
-        <span>전체 인원</span>
-        <strong>{totalPeople}명</strong>
-      </div>
-      <div>
-        <span>정산받을 인원</span>
-        <strong>{preview.invoiceCount}명</strong>
-      </div>
-      {inputMode === "krw" ? (
-        <>
-          {preview.payerShareKrw !== null && (
+    <div className="preview-details">
+      <div className="preview-grid">
+        <div>
+          <span>총 금액</span>
+          <strong>
+            {totalAmount ? formatInteger(BigInt(totalAmount)) : "0"}
+            {inputMode === "krw" ? "원" : " sats"}
+          </strong>
+        </div>
+        <div>
+          <span>전체 인원</span>
+          <strong>{totalPeople}명</strong>
+        </div>
+        <div>
+          <span>정산받을 인원</span>
+          <strong>{preview.invoiceCount}명</strong>
+        </div>
+        {inputMode === "krw" ? (
+          <>
+            {preview.payerShareKrw !== null && (
+              <div>
+                <span>내 최종 부담</span>
+                <strong>{formatInteger(preview.payerShareKrw)}원</strong>
+              </div>
+            )}
             <div>
-              <span>내 최종 부담</span>
-              <strong>{formatInteger(preview.payerShareKrw)}원</strong>
+              <span>사람별 원화 몫</span>
+              <strong>{formatAmountRange(preview.invoiceShares, "원")}</strong>
             </div>
-          )}
-          <div>
-            <span>사람별 원화 몫</span>
-            <strong>{formatAmountRange(preview.invoiceShares, "원")}</strong>
-          </div>
-          <div>
-            <span>QR별 결제 금액</span>
-            <strong>{formatAmountRange(preview.targetSats, " sats")}</strong>
-          </div>
-        </>
-      ) : (
-        <>
-          {preview.payerShareSats !== null && (
             <div>
-              <span>내 부담</span>
-              <strong>{formatInteger(preview.payerShareSats)} sats</strong>
+              <span>QR별 결제 금액</span>
+              <strong>{formatAmountRange(preview.targetSats, " sats")}</strong>
             </div>
-          )}
-          <div>
-            <span>1인당 결제 금액</span>
-            <strong>{formatAmountRange(preview.targetSats, " sats")}</strong>
-          </div>
-          <div>
-            <span>받을 총 sats</span>
-            <strong>{formatInteger(receivableSats)} sats</strong>
-          </div>
-        </>
-      )}
+          </>
+        ) : (
+          <>
+            {preview.payerShareSats !== null && (
+              <div>
+                <span>내 부담</span>
+                <strong>{formatInteger(preview.payerShareSats)} sats</strong>
+              </div>
+            )}
+            <div>
+              <span>1인당 결제 금액</span>
+              <strong>{formatAmountRange(preview.targetSats, " sats")}</strong>
+            </div>
+            <div>
+              <span>받을 총 sats</span>
+              <strong>{formatInteger(receivableSats)} sats</strong>
+            </div>
+          </>
+        )}
+      </div>
       {inputMode === "krw" && priceSnapshotAt && (
-        <div className="wide-preview-item">
+        <div className="preview-time-card">
           <span>가격 확인 시각</span>
           <strong>{new Date(priceSnapshotAt).toLocaleString("ko-KR")}</strong>
         </div>
@@ -526,6 +547,8 @@ export function App() {
   const [restoring, setRestoring] = useState(true);
   const [activeSlotIndex, setActiveSlotIndex] = useState(0);
   const carouselRef = useRef<HTMLElement>(null);
+  const sessionEpochRef = useRef(0);
+  const retryOperationRef = useRef<string | undefined>(undefined);
   const priceInformation = market.information;
   const priceSnapshot = priceInformation?.snapshot;
   const lightningInvoiceInput = isLightningInvoiceInput(lightningAddress);
@@ -543,11 +566,12 @@ export function App() {
   }, [refreshLockedSnapshot]);
 
   useEffect(() => {
+    const restoreEpoch = sessionEpochRef.current;
     void loadActiveSession()
       .then((stored) => {
-        if (stored) {
+        if (stored && sessionEpochRef.current === restoreEpoch) {
           setActiveSlotIndex(0);
-          setSession(markExpiredSlots(stored));
+          setSession(markExpiredSlots(recoverInterruptedSession(stored)));
         }
       })
       .catch(() =>
@@ -613,17 +637,21 @@ export function App() {
       setError(LIGHTNING_INVOICE_INPUT_MESSAGE);
       return;
     }
+    const operationEpoch = sessionEpochRef.current + 1;
+    sessionEpochRef.current = operationEpoch;
     setBusy(true);
     setError(undefined);
     try {
       const lockedSnapshot =
         inputMode === "krw" ? await refreshPrice() : undefined;
+      if (sessionEpochRef.current !== operationEpoch) return;
       const lockedPreview = createSettlementPreview(draft, lockedSnapshot);
       const generating = createGeneratingSession(
         draft,
         lockedPreview,
         lockedSnapshot,
       );
+      if (sessionEpochRef.current !== operationEpoch) return;
       setActiveSlotIndex(0);
       setSession(generating);
       const response = await requestInvoiceBatch({
@@ -636,8 +664,15 @@ export function App() {
           ...(slot.krwShare ? { krwShare: slot.krwShare } : {}),
         })),
       });
-      setSession(applyBatchResponse(generating, response));
+      if (sessionEpochRef.current === operationEpoch) {
+        setSession((current) =>
+          current?.id === generating.id
+            ? applyBatchResponse(current, response)
+            : current,
+        );
+      }
     } catch (cause) {
+      if (sessionEpochRef.current !== operationEpoch) return;
       const message = toUserMessage(cause, "정산을 시작하지 못했습니다.");
       setError(message);
       if (
@@ -673,22 +708,12 @@ export function App() {
         );
       }
     } finally {
-      setBusy(false);
+      if (sessionEpochRef.current === operationEpoch) setBusy(false);
     }
   };
 
   const retrySlot = async (slotNumber: number) => {
-    if (!session) return;
-    if (
-      session.slots.some(
-        (slot) =>
-          slot.slotNumber !== slotNumber &&
-          (slot.status === "pending" || slot.status === "generating"),
-      )
-    ) {
-      setError("현재 결제 요청을 먼저 완료하거나 만료를 기다리십시오.");
-      return;
-    }
+    if (!session || retryOperationRef.current !== undefined) return;
     const excludedPaymentHashes = collectIssuedPaymentHashes(session);
     const excludedInvoices = session.slots.flatMap((slot) =>
       slot.invoice ? [slot.invoice.bolt11] : [],
@@ -703,6 +728,9 @@ export function App() {
     const target = prepared.slots.find(
       (slot) => slot.slotNumber === slotNumber,
     )!;
+    const operationEpoch = sessionEpochRef.current;
+    const operationKey = `${prepared.id}:${slotNumber}:${target.attempt}`;
+    retryOperationRef.current = operationKey;
     setRetryingSlot(slotNumber);
     setError(undefined);
     setSession(prepared);
@@ -723,25 +751,28 @@ export function App() {
         excludedPaymentHashes,
         excludedInvoices,
       });
-      setSession((current) =>
-        current
-          ? applySlotRetryResponse(
-              current,
-              slotNumber,
-              response,
-              excludedPaymentHashes,
-              excludedInvoices,
-            )
-          : current,
-      );
+      if (sessionEpochRef.current === operationEpoch) {
+        setSession((current) =>
+          current?.id === prepared.id
+            ? applySlotRetryResponse(
+                current,
+                slotNumber,
+                response,
+                excludedPaymentHashes,
+                excludedInvoices,
+              )
+            : current,
+        );
+      }
     } catch (cause) {
+      if (sessionEpochRef.current !== operationEpoch) return;
       const message = toUserMessage(
         cause,
         "결제 요청을 다시 만들지 못했습니다.",
       );
       setError(message);
       setSession((current) =>
-        current
+        current?.id === prepared.id
           ? {
               ...current,
               slots: current.slots.map((slot) =>
@@ -761,12 +792,16 @@ export function App() {
           : current,
       );
     } finally {
-      setRetryingSlot(undefined);
+      if (retryOperationRef.current === operationKey) {
+        retryOperationRef.current = undefined;
+        setRetryingSlot(undefined);
+      }
     }
   };
 
   const issueQueuedSlot = useCallback(
     async (source: SettlementSession, slotNumber: number) => {
+      if (retryOperationRef.current !== undefined) return;
       const excludedPaymentHashes = collectIssuedPaymentHashes(source);
       const excludedInvoices = source.slots.flatMap((slot) =>
         slot.invoice ? [slot.invoice.bolt11] : [],
@@ -781,6 +816,9 @@ export function App() {
       const target = prepared.slots.find(
         (slot) => slot.slotNumber === slotNumber,
       )!;
+      const operationEpoch = sessionEpochRef.current;
+      const operationKey = `${prepared.id}:${slotNumber}:${target.attempt}`;
+      retryOperationRef.current = operationKey;
       setRetryingSlot(slotNumber);
       setError(undefined);
       setSession(prepared);
@@ -801,25 +839,28 @@ export function App() {
           excludedPaymentHashes,
           excludedInvoices,
         });
-        setSession((current) =>
-          current
-            ? applySlotRetryResponse(
-                current,
-                slotNumber,
-                response,
-                excludedPaymentHashes,
-                excludedInvoices,
-              )
-            : current,
-        );
+        if (sessionEpochRef.current === operationEpoch) {
+          setSession((current) =>
+            current?.id === prepared.id
+              ? applySlotRetryResponse(
+                  current,
+                  slotNumber,
+                  response,
+                  excludedPaymentHashes,
+                  excludedInvoices,
+                )
+              : current,
+          );
+        }
       } catch (cause) {
+        if (sessionEpochRef.current !== operationEpoch) return;
         const message = toUserMessage(
           cause,
           "다음 결제 요청을 만들지 못했습니다.",
         );
         setError(message);
         setSession((current) =>
-          current
+          current?.id === prepared.id
             ? {
                 ...current,
                 slots: current.slots.map((slot) =>
@@ -839,7 +880,10 @@ export function App() {
             : current,
         );
       } finally {
-        setRetryingSlot(undefined);
+        if (retryOperationRef.current === operationKey) {
+          retryOperationRef.current = undefined;
+          setRetryingSlot(undefined);
+        }
       }
     },
     [],
@@ -849,7 +893,10 @@ export function App() {
     if (!session || busy || retryingSlot !== undefined) return;
     if (
       session.slots.some(
-        (slot) => slot.status === "pending" || slot.status === "generating",
+        (slot) =>
+          slot.status === "pending" ||
+          slot.status === "generating" ||
+          slot.status === "verifyingExpired",
       )
     )
       return;
@@ -863,11 +910,15 @@ export function App() {
   }, [busy, issueQueuedSlot, retryingSlot, session]);
 
   const resetSession = async () => {
+    sessionEpochRef.current += 1;
+    retryOperationRef.current = undefined;
+    setBusy(false);
+    setRetryingSlot(undefined);
+    setActiveSlotIndex(0);
+    setSession(null);
+    setError(undefined);
     try {
       await clearActiveSession();
-      setActiveSlotIndex(0);
-      setSession(null);
-      setError(undefined);
       setPersistenceError(undefined);
     } catch {
       setPersistenceError("기기에 저장된 정산 기록을 삭제하지 못했습니다.");
@@ -1102,7 +1153,7 @@ export function App() {
               key={`${slot.slotNumber}-${slot.attempt}`}
               slot={slot}
               candidates={session.participantNameCandidates}
-              retrying={retryingSlot === slot.slotNumber}
+              retrying={retryingSlot !== undefined}
               onAnnotate={annotate}
               onRetry={(slotNumber) => void retrySlot(slotNumber)}
               onManualConfirm={manualConfirm}

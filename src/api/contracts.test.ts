@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createTestBolt11 } from "../test/bolt11-fixture";
 import { parseBatchInvoiceRequest, parseSettlementRequest } from "./contracts";
 
 describe("Worker API DTO validation", () => {
@@ -61,6 +62,31 @@ describe("Worker API DTO validation", () => {
         verificationToken: "https://wallet.example/verify",
       }),
     ).toThrowError();
+  });
+
+  it("accepts long valid invoices in retry exclusions and settlement requests", () => {
+    const fixture = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "contract-long-invoice",
+      description: "x".repeat(639),
+    });
+    const token = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+    expect(fixture.invoice.length).toBeGreaterThan(1_200);
+
+    expect(
+      parseBatchInvoiceRequest({
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 2 }],
+        excludedInvoices: [fixture.invoice],
+      }).excludedInvoices,
+    ).toEqual([fixture.invoice]);
+    expect(
+      parseSettlementRequest({
+        verificationToken: token,
+        paymentHash: fixture.paymentHash,
+        bolt11: fixture.invoice,
+      }).bolt11,
+    ).toBe(fixture.invoice);
   });
 
   it("keeps an automatically forwarded provider comment and validates retry exclusions", () => {

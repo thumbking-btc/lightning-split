@@ -202,7 +202,12 @@ export class PriceSnapshotService {
 
   async getSnapshot(): Promise<PriceSnapshot> {
     const nowMs = this.clock();
-    const cached = await this.cache.get();
+    let cached: PriceSnapshot | null = null;
+    try {
+      cached = await this.cache.get();
+    } catch {
+      // Cache availability is optional; upstream freshness remains authoritative.
+    }
     if (cached) {
       const observedAtMs = Date.parse(cached.observedAt);
       const retrievedAtMs = Date.parse(cached.retrievedAt);
@@ -240,7 +245,11 @@ export class PriceSnapshotService {
           snapshotAt: new Date(this.clock()).toISOString(),
           fallbackUsed,
         });
-        await this.cache.put(snapshot);
+        try {
+          await this.cache.put(snapshot);
+        } catch {
+          // A cache write must not turn a fresh upstream snapshot into a failure.
+        }
         return snapshot;
       } catch (error) {
         errors.push(error);

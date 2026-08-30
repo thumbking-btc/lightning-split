@@ -82,10 +82,10 @@ export async function checkSettlement(
       "The settlement response has no boolean settled field.",
     );
   }
-  if (value.pr !== undefined && value.pr !== input.expectedInvoice) {
+  if (value.pr !== input.expectedInvoice) {
     throw new InfrastructureError(
       "INVALID_RESPONSE",
-      "The settlement response invoice does not match.",
+      "The settlement response invoice is missing or does not match.",
     );
   }
   let preimagePresent = false;

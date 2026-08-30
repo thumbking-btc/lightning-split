@@ -13,6 +13,7 @@ import {
   serializePriceSnapshot,
 } from "../api/serialization";
 import { isRecord } from "../infrastructure/validation";
+import { MAX_BOLT11_LENGTH } from "../lightning/bolt11";
 
 export class ApiClientError extends Error {
   constructor(
@@ -36,7 +37,9 @@ async function parseApiResponse(response: Response): Promise<unknown> {
           ? value.error.message
           : "요청에 실패했습니다.",
         value.error.retryable === true,
-        typeof value.error.retryAfterSeconds === "number"
+        typeof value.error.retryAfterSeconds === "number" &&
+          Number.isSafeInteger(value.error.retryAfterSeconds) &&
+          value.error.retryAfterSeconds >= 0
           ? value.error.retryAfterSeconds
           : undefined,
       );
@@ -55,23 +58,42 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
     !isRecord(value) ||
     value.status !== "pending" ||
     typeof value.slotNumber !== "number" ||
+    !Number.isSafeInteger(value.slotNumber) ||
+    Number(value.slotNumber) < 1 ||
     typeof value.targetSats !== "string" ||
+    !/^[1-9]\d*$/u.test(value.targetSats) ||
     typeof value.attempt !== "number" ||
+    !Number.isSafeInteger(value.attempt) ||
+    Number(value.attempt) < 1 ||
     !isRecord(value.invoice) ||
     typeof value.invoice.bolt11 !== "string" ||
+    value.invoice.bolt11.length > MAX_BOLT11_LENGTH ||
+    !/^lnbc[0123456789acdefghjklmnpqrstuvwxyz]+$/u.test(value.invoice.bolt11) ||
     typeof value.invoice.paymentHash !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.invoice.paymentHash) ||
     typeof value.invoice.timestampSeconds !== "number" ||
+    !Number.isSafeInteger(value.invoice.timestampSeconds) ||
+    Number(value.invoice.timestampSeconds) < 1 ||
     typeof value.invoice.expirySeconds !== "number" ||
+    !Number.isSafeInteger(value.invoice.expirySeconds) ||
+    Number(value.invoice.expirySeconds) < 1 ||
     typeof value.invoice.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.invoice.expiresAt)) ||
     typeof value.invoice.payeeNodeId !== "string" ||
+    !/^[0-9a-f]{66}$/u.test(value.invoice.payeeNodeId) ||
     !Array.isArray(value.invoice.featureBits) ||
-    !value.invoice.featureBits.every((bit) => typeof bit === "number") ||
+    !value.invoice.featureBits.every(
+      (bit) => Number.isSafeInteger(bit) && Number(bit) >= 0,
+    ) ||
     typeof value.invoice.providerDomain !== "string" ||
     (value.invoice.disposable !== undefined &&
       typeof value.invoice.disposable !== "boolean") ||
     (value.invoice.verificationToken !== undefined &&
-      typeof value.invoice.verificationToken !== "string") ||
-    (value.krwShare !== undefined && typeof value.krwShare !== "string")
+      (typeof value.invoice.verificationToken !== "string" ||
+        value.invoice.verificationToken.length > 4_200)) ||
+    (value.krwShare !== undefined &&
+      (typeof value.krwShare !== "string" ||
+        !/^[1-9]\d*$/u.test(value.krwShare)))
   ) {
     throw new ApiClientError(
       "INVALID_RESPONSE",
@@ -109,9 +131,16 @@ function assertDeferredSlot(value: unknown): DeferredInvoiceSlotDto {
     !isRecord(value) ||
     value.status !== "deferred" ||
     typeof value.slotNumber !== "number" ||
+    !Number.isSafeInteger(value.slotNumber) ||
+    Number(value.slotNumber) < 1 ||
     typeof value.targetSats !== "string" ||
+    !/^[1-9]\d*$/u.test(value.targetSats) ||
     typeof value.attempt !== "number" ||
-    (value.krwShare !== undefined && typeof value.krwShare !== "string")
+    !Number.isSafeInteger(value.attempt) ||
+    Number(value.attempt) < 1 ||
+    (value.krwShare !== undefined &&
+      (typeof value.krwShare !== "string" ||
+        !/^[1-9]\d*$/u.test(value.krwShare)))
   ) {
     throw new ApiClientError(
       "INVALID_RESPONSE",
@@ -133,13 +162,20 @@ function assertFailedSlot(value: unknown): FailedInvoiceSlotDto {
     !isRecord(value) ||
     value.status !== "failed" ||
     typeof value.slotNumber !== "number" ||
+    !Number.isSafeInteger(value.slotNumber) ||
+    Number(value.slotNumber) < 1 ||
     typeof value.targetSats !== "string" ||
+    !/^[1-9]\d*$/u.test(value.targetSats) ||
     typeof value.attempt !== "number" ||
+    !Number.isSafeInteger(value.attempt) ||
+    Number(value.attempt) < 1 ||
     !isRecord(value.failure) ||
     typeof value.failure.code !== "string" ||
     typeof value.failure.message !== "string" ||
     typeof value.failure.retryable !== "boolean" ||
-    (value.krwShare !== undefined && typeof value.krwShare !== "string")
+    (value.krwShare !== undefined &&
+      (typeof value.krwShare !== "string" ||
+        !/^[1-9]\d*$/u.test(value.krwShare)))
   ) {
     throw new ApiClientError(
       "INVALID_RESPONSE",
@@ -229,6 +265,8 @@ export async function requestInvoiceBatch(
     !isRecord(value.provider) ||
     typeof value.provider.domain !== "string" ||
     typeof value.provider.commentAllowed !== "number" ||
+    !Number.isSafeInteger(value.provider.commentAllowed) ||
+    Number(value.provider.commentAllowed) < 0 ||
     (value.provider.commentStatus !== undefined &&
       value.provider.commentStatus !== "forwarded" &&
       value.provider.commentStatus !== "unsupported" &&
@@ -237,10 +275,15 @@ export async function requestInvoiceBatch(
       value.provider.descriptionStatus !== "embedded" &&
       value.provider.descriptionStatus !== "notEmbedded" &&
       value.provider.descriptionStatus !== "partial") ||
-    typeof value.provider.automaticSettlementAvailable !== "boolean" ||
+    (value.provider.automaticSettlementAvailable !== undefined &&
+      typeof value.provider.automaticSettlementAvailable !== "boolean") ||
     !Array.isArray(value.slots) ||
     typeof value.completedCount !== "number" ||
-    typeof value.failedCount !== "number"
+    !Number.isSafeInteger(value.completedCount) ||
+    Number(value.completedCount) < 0 ||
+    typeof value.failedCount !== "number" ||
+    !Number.isSafeInteger(value.failedCount) ||
+    Number(value.failedCount) < 0
   ) {
     throw new ApiClientError(
       "INVALID_RESPONSE",
@@ -248,29 +291,92 @@ export async function requestInvoiceBatch(
       false,
     );
   }
-  const slots = value.slots.map((slot) =>
+  const provider = value.provider;
+  const parsedSlots = value.slots.map((slot) =>
     isRecord(slot) && slot.status === "pending"
       ? assertPendingSlot(slot)
       : isRecord(slot) && slot.status === "deferred"
         ? assertDeferredSlot(slot)
         : assertFailedSlot(slot),
   );
+  if (parsedSlots.length !== input.slots.length) {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "결제 응답 수가 요청과 일치하지 않습니다.",
+      false,
+    );
+  }
+  const slotsByNumber = new Map(
+    parsedSlots.map((slot) => [slot.slotNumber, slot] as const),
+  );
+  if (slotsByNumber.size !== parsedSlots.length) {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "중복된 결제 응답이 포함되어 있습니다.",
+      false,
+    );
+  }
+  const slots = input.slots.map((requested) => {
+    const slot = slotsByNumber.get(requested.slotNumber);
+    if (
+      !slot ||
+      slot.targetSats !== requested.targetSats ||
+      slot.attempt !== requested.attempt ||
+      slot.krwShare !== requested.krwShare
+    ) {
+      throw new ApiClientError(
+        "INVALID_RESPONSE",
+        "결제 응답이 요청한 슬롯과 일치하지 않습니다.",
+        false,
+      );
+    }
+    return slot;
+  });
+  const pending = slots.filter(
+    (slot): slot is PendingInvoiceSlotDto => slot.status === "pending",
+  );
+  if (
+    Number(value.completedCount) !== pending.length ||
+    Number(value.failedCount) !==
+      slots.filter((slot) => slot.status === "failed").length ||
+    pending.some((slot) => slot.invoice.providerDomain !== provider.domain) ||
+    new Set(pending.map((slot) => slot.invoice.paymentHash)).size !==
+      pending.length ||
+    new Set(pending.map((slot) => slot.invoice.bolt11)).size !==
+      pending.length ||
+    pending.some(
+      (slot) =>
+        input.excludedPaymentHashes?.includes(slot.invoice.paymentHash) ||
+        input.excludedInvoices?.includes(slot.invoice.bolt11),
+    )
+  ) {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "결제 응답의 합계 또는 invoice 식별자가 올바르지 않습니다.",
+      false,
+    );
+  }
   return {
     ok: true,
     provider: {
-      domain: value.provider.domain,
-      commentAllowed: value.provider.commentAllowed,
-      ...(value.provider.commentStatus === "forwarded" ||
-      value.provider.commentStatus === "unsupported" ||
-      value.provider.commentStatus === "partial"
-        ? { commentStatus: value.provider.commentStatus }
+      domain: String(provider.domain),
+      commentAllowed: Number(provider.commentAllowed),
+      ...(provider.commentStatus === "forwarded" ||
+      provider.commentStatus === "unsupported" ||
+      provider.commentStatus === "partial"
+        ? { commentStatus: provider.commentStatus }
         : {}),
-      ...(value.provider.descriptionStatus === "embedded" ||
-      value.provider.descriptionStatus === "notEmbedded" ||
-      value.provider.descriptionStatus === "partial"
-        ? { descriptionStatus: value.provider.descriptionStatus }
+      ...(provider.descriptionStatus === "embedded" ||
+      provider.descriptionStatus === "notEmbedded" ||
+      provider.descriptionStatus === "partial"
+        ? { descriptionStatus: provider.descriptionStatus }
         : {}),
-      automaticSettlementAvailable: value.provider.automaticSettlementAvailable,
+      automaticSettlementAvailable:
+        typeof provider.automaticSettlementAvailable === "boolean"
+          ? provider.automaticSettlementAvailable
+          : pending.some(
+              (slot) => slot.invoice.verificationToken !== undefined,
+            ),
     },
     slots,
     completedCount: value.completedCount,

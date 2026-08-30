@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { createTestBolt11 } from "../test/bolt11-fixture";
-import { Bolt11InvoiceError, validateBolt11Invoice } from "./bolt11";
+import {
+  Bolt11InvoiceError,
+  MAX_BOLT11_LENGTH,
+  validateBolt11Invoice,
+} from "./bolt11";
 
 describe("validateBolt11Invoice", () => {
   const nowSeconds = 1_900_000_100;
@@ -80,5 +84,23 @@ describe("validateBolt11Invoice", () => {
         nowSeconds,
       }),
     ).toThrowError(Bolt11InvoiceError);
+  });
+
+  it("accepts a valid long-description invoice above the legacy 1,200-character limit", () => {
+    const description = "x".repeat(639);
+    const fixture = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "long-description",
+      description,
+    });
+
+    expect(fixture.invoice.length).toBeGreaterThan(1_200);
+    expect(fixture.invoice.length).toBeLessThanOrEqual(MAX_BOLT11_LENGTH);
+    expect(
+      validateBolt11Invoice(fixture.invoice, {
+        expectedSats: 1_000n,
+        nowSeconds,
+      }).description,
+    ).toBe(description);
   });
 });

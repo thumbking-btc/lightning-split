@@ -10,6 +10,7 @@ export type ClientSlotStatus =
   | "generating"
   | "queued"
   | "pending"
+  | "verifyingExpired"
   | "settled"
   | "manuallyConfirmed"
   | "expired"

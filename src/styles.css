@@ -392,27 +392,33 @@ button {
   display: block;
   margin-top: 0.18rem;
 }
+.preview-details,
 .preview-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
 }
-.preview-grid div {
+.preview-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.preview-grid div,
+.preview-time-card {
   display: grid;
+  min-width: 0;
   gap: 0.2rem;
   padding: 0.8rem;
   border-radius: 0.85rem;
   background: #f3eee3;
 }
-.preview-grid span {
+.preview-grid span,
+.preview-time-card span {
   color: var(--muted);
   font-size: 0.72rem;
 }
-.preview-grid strong {
+.preview-grid strong,
+.preview-time-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 0.9rem;
-}
-.wide-preview-item {
-  grid-column: 1 / -1;
 }
 .app-version {
   width: min(100%, 480px);

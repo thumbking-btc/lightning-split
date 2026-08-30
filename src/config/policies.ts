@@ -18,6 +18,7 @@ export interface LightningPolicy {
   readonly callbackHttp: HttpFetchPolicy;
   readonly settlementHttp: HttpFetchPolicy;
   readonly minimumInvoiceRemainingSeconds: number;
+  readonly settlementFinalVerificationGraceSeconds: number;
   readonly maximumBatchSize: number;
   readonly maximumProviderCommentCharacters: number;
 }
@@ -45,7 +46,7 @@ export const DEFAULT_LIGHTNING_POLICY: Readonly<LightningPolicy> =
     discoveryHttp: Object.freeze({
       timeoutMs: 5_000,
       maxRedirects: 2,
-      maxResponseBytes: 65_536,
+      maxResponseBytes: 192 * 1_024,
       userAgent: "LightningSplit/0.1 (+Lightning Address discovery)",
     }),
     callbackHttp: Object.freeze({
@@ -61,6 +62,7 @@ export const DEFAULT_LIGHTNING_POLICY: Readonly<LightningPolicy> =
       userAgent: "LightningSplit/0.1 (+LUD-21 settlement check)",
     }),
     minimumInvoiceRemainingSeconds: 120,
+    settlementFinalVerificationGraceSeconds: 60,
     maximumBatchSize: 10,
     maximumProviderCommentCharacters: 255,
   });

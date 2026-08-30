@@ -65,7 +65,7 @@ describe("v1 mobile accessibility states", () => {
     expect(html).not.toContain("직접 입력 기준");
   });
 
-  it("keeps the KRW snapshot card in the same responsive grid row flow", () => {
+  it("keeps the KRW snapshot card outside the two-column auto-placement grid", () => {
     const html = renderToStaticMarkup(
       <SettlementPreviewDetails
         inputMode="krw"
@@ -82,7 +82,9 @@ describe("v1 mobile accessibility states", () => {
       />,
     );
     expect(html.match(/class="preview-grid"/gu)).toHaveLength(1);
-    expect(html).toContain('class="wide-preview-item"');
+    expect(html).toContain('class="preview-details"');
+    expect(html).toContain('class="preview-time-card"');
+    expect(html).not.toContain('class="wide-preview-item"');
     expect(html).toContain("가격 확인 시각");
   });
 

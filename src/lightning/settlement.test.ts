@@ -68,6 +68,11 @@ describe("single LUD-21 settlement check", () => {
     };
     await expect(
       checkSettlement(input, {
+        fetcher: responseFetcher({ settled: true }),
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    await expect(
+      checkSettlement(input, {
         fetcher: responseFetcher({ settled: true, pr: "other" }),
       }),
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });

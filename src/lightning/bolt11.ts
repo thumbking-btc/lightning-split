@@ -2,7 +2,7 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bech32 } from "@scure/base";
 
-export const MAX_BOLT11_LENGTH = 1_200;
+export const MAX_BOLT11_LENGTH = 2_300;
 export const DEFAULT_BOLT11_EXPIRY_SECONDS = 3_600;
 
 const CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";

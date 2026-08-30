@@ -8,8 +8,10 @@ import {
   parseProviderInteger,
   sanitizeProviderReason,
 } from "../infrastructure/validation";
+import { MAX_BOLT11_LENGTH } from "./bolt11";
 
 const USERNAME_PATTERN = /^[a-z0-9._+-]{1,64}$/u;
+const MAX_METADATA_IMAGE_CHARACTERS = 136_536;
 
 export interface NormalizedLightningAddress {
   readonly address: string;
@@ -121,14 +123,24 @@ function parseMetadata(value: unknown): {
     );
   }
   const entries = decoded as [string, ...unknown[]][];
+  const plainTextEntries = entries.filter((entry) => entry[0] === "text/plain");
+  const imageEntries = entries.filter(
+    (entry) =>
+      entry[0] === "image/png;base64" || entry[0] === "image/jpeg;base64",
+  );
   if (
-    !entries.some(
-      (entry) => entry[0] === "text/plain" && typeof entry[1] === "string",
+    plainTextEntries.length !== 1 ||
+    typeof plainTextEntries[0]?.[1] !== "string" ||
+    imageEntries.length > 1 ||
+    imageEntries.some(
+      (entry) =>
+        typeof entry[1] !== "string" ||
+        entry[1].length > MAX_METADATA_IMAGE_CHARACTERS,
     )
   ) {
     throw new InfrastructureError(
       "INVALID_RESPONSE",
-      "LNURL metadata has no text/plain description.",
+      "LNURL metadata descriptions or images are invalid.",
     );
   }
   return { raw: value, entries };
@@ -299,7 +311,7 @@ export class LnurlPayClient {
     if (
       typeof value.pr !== "string" ||
       value.pr.length === 0 ||
-      value.pr.length > 1_200
+      value.pr.length > MAX_BOLT11_LENGTH
     ) {
       throw new InfrastructureError(
         "INVALID_RESPONSE",

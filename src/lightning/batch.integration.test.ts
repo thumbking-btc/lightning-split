@@ -73,8 +73,8 @@ function clientWith(
   return { client: { discover, requestInvoice: callback }, discover, callback };
 }
 
-describe("sequential invoice batch generation", () => {
-  it("discovers once and produces N unique validated pending invoices sequentially", async () => {
+describe("invoice batch generation", () => {
+  it("produces N unique validated pending invoices concurrently", async () => {
     let active = 0;
     let maximumActive = 0;
     let call = 0;
@@ -100,7 +100,7 @@ describe("sequential invoice batch generation", () => {
     );
     expect(mock.discover).toHaveBeenCalledTimes(5);
     expect(mock.callback).toHaveBeenCalledTimes(5);
-    expect(maximumActive).toBe(1);
+    expect(maximumActive).toBe(5);
     expect(result.completedCount).toBe(5);
     const pending = result.slots.filter((slot) => slot.status === "pending");
     expect(new Set(pending.map((slot) => slot.invoice.bolt11)).size).toBe(5);
@@ -217,6 +217,33 @@ describe("sequential invoice batch generation", () => {
     expect(result.paymentDescriptionStatus).toBe("partial");
   });
 
+  it("accepts a provider-signed description hash without assuming its preimage", async () => {
+    const description = "8/30 고깃집 저녁";
+    const mock = clientWith(
+      (_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: "provider-description-hash",
+            descriptionHashSource: "provider-controlled private description",
+          }).invoice,
+        }),
+      { ...DISCOVERY, commentAllowed: 255 },
+    );
+
+    const result = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(1),
+        providerComment: description,
+      },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+
+    expect(result.slots[0]?.status).toBe("pending");
+    expect(result.paymentDescriptionStatus).toBe("notEmbedded");
+  });
+
   it("continues without a provider comment when comments are unsupported", async () => {
     const mock = clientWith((_discovery, amountSats) =>
       Promise.resolve({
@@ -301,6 +328,51 @@ describe("sequential invoice batch generation", () => {
     ]);
     expect(mock.callback).toHaveBeenCalledTimes(3);
   });
+
+  it.each([1, 2])(
+    "isolates discovery call %i failure without blocking other callback requests",
+    async (failedDiscoveryCall) => {
+      let discoveryCall = 0;
+      let invoiceCall = 0;
+      const discover = vi.fn(() => {
+        discoveryCall += 1;
+        return discoveryCall === failedDiscoveryCall
+          ? Promise.reject(
+              new InfrastructureError("NETWORK_ERROR", "discovery failed", {
+                retryable: true,
+              }),
+            )
+          : Promise.resolve(DISCOVERY);
+      });
+      const requestInvoice = vi.fn(
+        (_discovery: LnurlPayDiscovery, amountSats: bigint) =>
+          Promise.resolve({
+            invoice: createTestBolt11({
+              amountSats,
+              fixtureId: `rediscovery-${++invoiceCall}`,
+            }).invoice,
+            disposable: true,
+            commentSent: false,
+          }),
+      );
+
+      const result = await generateInvoiceBatch(
+        { address: "user@wallet.example", slots: slots(3) },
+        {
+          client: { discover, requestInvoice },
+          now: () => NOW_SECONDS * 1_000,
+        },
+      );
+
+      const expectedStatuses = ["pending", "pending", "pending"];
+      expectedStatuses[failedDiscoveryCall - 1] = "failed";
+      expect(result.slots.map((slot) => slot.status)).toEqual(expectedStatuses);
+      expect(result.slots[failedDiscoveryCall - 1]).toMatchObject({
+        failure: { code: "NETWORK_ERROR", retryable: true },
+      });
+      expect(requestInvoice).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("rejects duplicate payment hashes independently and still checks every slot", async () => {
     const mock = clientWith((_discovery, amountSats) =>
@@ -397,15 +469,16 @@ describe("sequential invoice batch generation", () => {
     },
   );
 
-  it("does not treat LUD-11 disposable as a callback or invoice concurrency capability", async () => {
+  it("keeps every normal slot issued while preserving response-time freshness", async () => {
     let call = 0;
     const mock = clientWith((_discovery, amountSats) =>
       Promise.resolve({
         invoice: createTestBolt11({
           amountSats,
-          fixtureId: `disposable-${++call}`,
+          fixtureId: `freshness-${++call}`,
+          timestamp: NOW_SECONDS,
+          expirySeconds: 180,
         }).invoice,
-        disposable: true,
       }),
     );
 
@@ -419,13 +492,102 @@ describe("sequential invoice batch generation", () => {
       "pending",
       "pending",
     ]);
-    expect(result.failedCount).toBe(0);
     expect(mock.discover).toHaveBeenCalledTimes(3);
     expect(mock.callback).toHaveBeenCalledTimes(3);
     const pending = result.slots.filter((slot) => slot.status === "pending");
-    expect(new Set(pending.map((slot) => slot.invoice.bolt11)).size).toBe(3);
     expect(new Set(pending.map((slot) => slot.invoice.paymentHash)).size).toBe(
       3,
     );
+    expect(
+      pending.every(
+        (slot) =>
+          Date.parse(slot.invoice.expiresAt) / 1_000 - NOW_SECONDS >= 120,
+      ),
+    ).toBe(true);
   });
+
+  it("accepts a single invoice with 121 seconds remaining", async () => {
+    const mock = clientWith((_discovery, amountSats) =>
+      Promise.resolve({
+        invoice: createTestBolt11({
+          amountSats,
+          fixtureId: "short-valid-invoice",
+          timestamp: NOW_SECONDS,
+          expirySeconds: 121,
+        }).invoice,
+      }),
+    );
+
+    const result = await generateInvoiceBatch(
+      { address: "user@wallet.example", slots: slots(1) },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+
+    expect(result.slots[0]?.status).toBe("pending");
+  });
+
+  it("rejects an early invoice that becomes too close to expiry before the response", async () => {
+    const mock = clientWith((_discovery, amountSats) =>
+      Promise.resolve({
+        invoice: createTestBolt11({
+          amountSats,
+          fixtureId: "stale-at-response",
+          timestamp: NOW_SECONDS,
+          expirySeconds: 121,
+        }).invoice,
+      }),
+    );
+    let clockCall = 0;
+
+    const result = await generateInvoiceBatch(
+      { address: "user@wallet.example", slots: slots(1) },
+      {
+        client: mock.client,
+        now: () => (NOW_SECONDS + (clockCall++ === 0 ? 0 : 2)) * 1_000,
+      },
+    );
+
+    expect(result.slots[0]).toMatchObject({
+      status: "failed",
+      failure: { code: "INVALID_BOLT11" },
+    });
+  });
+
+  it.each([true, false])(
+    "does not treat LUD-11 disposable=%s as a callback or invoice concurrency capability",
+    async (disposable) => {
+      let call = 0;
+      const mock = clientWith((_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: `disposable-${disposable}-${++call}`,
+          }).invoice,
+          disposable,
+        }),
+      );
+
+      const result = await generateInvoiceBatch(
+        { address: "user@wallet.example", slots: slots(3) },
+        { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+      );
+
+      expect(result.slots.map((slot) => slot.status)).toEqual([
+        "pending",
+        "pending",
+        "pending",
+      ]);
+      expect(result.failedCount).toBe(0);
+      expect(mock.discover).toHaveBeenCalledTimes(3);
+      expect(mock.callback).toHaveBeenCalledTimes(3);
+      const pending = result.slots.filter((slot) => slot.status === "pending");
+      expect(
+        pending.every((slot) => slot.invoice.disposable === disposable),
+      ).toBe(true);
+      expect(new Set(pending.map((slot) => slot.invoice.bolt11)).size).toBe(3);
+      expect(
+        new Set(pending.map((slot) => slot.invoice.paymentHash)).size,
+      ).toBe(3);
+    },
+  );
 });

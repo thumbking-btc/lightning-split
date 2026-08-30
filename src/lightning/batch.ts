@@ -161,104 +161,160 @@ export async function generateInvoiceBatch(
   const policy = dependencies.policy ?? DEFAULT_LIGHTNING_POLICY;
   const now = dependencies.now ?? Date.now;
   validateBatchInput(input, policy);
-  const discovery = await dependencies.client.discover(input.address);
-  const results: (
-    PendingInvoiceSlot | FailedInvoiceSlot | DeferredInvoiceSlot
-  )[] = [];
   const invoices = new Set<string>(input.excludedInvoices ?? []);
   const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
   const commentStatuses: ProviderCommentStatus[] = [];
   const descriptionStatuses: Exclude<PaymentDescriptionStatus, "partial">[] =
     [];
-  for (const [index, slot] of input.slots.entries()) {
-    try {
-      const slotDiscovery =
-        index === 0
-          ? discovery
-          : await dependencies.client.discover(input.address);
-      const providerComment = providerCommentForDiscovery(
-        input.providerComment,
-        slotDiscovery,
-      );
-      const callback = await dependencies.client.requestInvoice(
-        slotDiscovery,
-        slot.targetSats,
-        {
-          ...(providerComment !== undefined
-            ? { comment: providerComment }
-            : {}),
-        },
-      );
-      let validated;
+  const discoveryResults = await Promise.allSettled(
+    input.slots.map(() => dependencies.client.discover(input.address)),
+  );
+  const discovery = discoveryResults.find(
+    (result): result is PromiseFulfilledResult<LnurlPayDiscovery> =>
+      result.status === "fulfilled",
+  )?.value;
+  if (!discovery) {
+    const firstFailure = discoveryResults.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    throw firstFailure?.reason;
+  }
+  const generatedSlots = await Promise.all(
+    input.slots.map(async (slot, index) => {
+      const discoveryResult = discoveryResults[index];
+      if (!discoveryResult || discoveryResult.status === "rejected") {
+        return {
+          kind: "failure" as const,
+          slot: failureSlot(slot, discoveryResult?.reason),
+        };
+      }
+      const slotDiscovery = discoveryResult.value;
       try {
-        validated = validateBolt11Invoice(callback.invoice, {
-          expectedSats: slot.targetSats,
-          expectedDescription: slotDiscovery.metadata,
-          nowSeconds: Math.floor(now() / 1_000),
-          minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
-        });
-      } catch (cause) {
-        throw new InfrastructureError(
-          "INVALID_BOLT11",
-          "The provider returned an invalid BOLT11 invoice.",
+        const providerComment = providerCommentForDiscovery(
+          input.providerComment,
+          slotDiscovery,
+        );
+        const callback = await dependencies.client.requestInvoice(
+          slotDiscovery,
+          slot.targetSats,
           {
-            cause,
+            ...(providerComment !== undefined
+              ? { comment: providerComment }
+              : {}),
           },
         );
-      }
-      if (
-        invoices.has(validated.canonicalInvoice) ||
-        hashes.has(validated.paymentHash)
-      ) {
-        throw new InfrastructureError(
-          "DUPLICATE_PAYMENT_HASH",
-          "The provider reused an invoice or payment hash.",
-        );
-      }
-      invoices.add(validated.canonicalInvoice);
-      hashes.add(validated.paymentHash);
-      results.push({
-        ...slot,
-        status: "pending",
-        invoice: {
-          bolt11: validated.canonicalInvoice,
-          paymentHash: validated.paymentHash,
-          timestampSeconds: validated.timestamp,
-          expirySeconds: validated.expirySeconds,
-          expiresAt: new Date(validated.expiresAt * 1_000).toISOString(),
-          payeeNodeId: validated.payeeNodeId,
-          featureBits: validated.featureBits,
-          disposable: callback.disposable,
-          ...(callback.verifyUrl !== undefined
-            ? { verifyUrl: callback.verifyUrl }
-            : {}),
-          provider: {
-            domain: slotDiscovery.domain,
-            discoveryUrl: slotDiscovery.discoveryUrl,
-            callbackUrl: slotDiscovery.callbackUrl,
+        let validated;
+        try {
+          validated = validateBolt11Invoice(callback.invoice, {
+            expectedSats: slot.targetSats,
+            nowSeconds: Math.floor(now() / 1_000),
+            minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
+          });
+        } catch (cause) {
+          throw new InfrastructureError(
+            "INVALID_BOLT11",
+            "The provider returned an invalid BOLT11 invoice.",
+            { cause },
+          );
+        }
+        const pendingSlot: PendingInvoiceSlot = {
+          ...slot,
+          status: "pending",
+          invoice: {
+            bolt11: validated.canonicalInvoice,
+            paymentHash: validated.paymentHash,
+            timestampSeconds: validated.timestamp,
+            expirySeconds: validated.expirySeconds,
+            expiresAt: new Date(validated.expiresAt * 1_000).toISOString(),
+            payeeNodeId: validated.payeeNodeId,
+            featureBits: validated.featureBits,
+            disposable: callback.disposable,
+            ...(callback.verifyUrl !== undefined
+              ? { verifyUrl: callback.verifyUrl }
+              : {}),
+            provider: {
+              domain: slotDiscovery.domain,
+              discoveryUrl: slotDiscovery.discoveryUrl,
+              callbackUrl: slotDiscovery.callbackUrl,
+            },
           },
-        },
-        settlementCheck: callback.verifyUrl
-          ? { status: "notChecked" }
-          : { status: "notAvailable" },
-      });
-      if (input.providerComment !== undefined)
-        commentStatuses.push(
-          callback.commentSent ? "forwarded" : "unsupported",
-        );
-      if (input.providerComment !== undefined)
-        descriptionStatuses.push(
-          invoiceBindsPaymentDescription(
-            input.providerComment,
-            validated,
-            slotDiscovery,
-          )
-            ? "embedded"
-            : "notEmbedded",
-        );
-    } catch (error) {
-      results.push(failureSlot(slot, error));
+          settlementCheck: callback.verifyUrl
+            ? { status: "notChecked" }
+            : { status: "notAvailable" },
+        };
+        return {
+          kind: "success" as const,
+          request: slot,
+          slot: pendingSlot,
+          providerCommentStatus:
+            input.providerComment === undefined
+              ? undefined
+              : callback.commentSent
+                ? ("forwarded" as const)
+                : ("unsupported" as const),
+          paymentDescriptionStatus:
+            input.providerComment === undefined
+              ? undefined
+              : invoiceBindsPaymentDescription(
+                    input.providerComment,
+                    validated,
+                    slotDiscovery,
+                  )
+                ? ("embedded" as const)
+                : ("notEmbedded" as const),
+        };
+      } catch (error) {
+        return { kind: "failure" as const, slot: failureSlot(slot, error) };
+      }
+    }),
+  );
+  const results: (
+    PendingInvoiceSlot | FailedInvoiceSlot | DeferredInvoiceSlot
+  )[] = [];
+  const responseNowSeconds = Math.floor(now() / 1_000);
+  for (const generated of generatedSlots) {
+    if (generated.kind === "failure") {
+      results.push(generated.slot);
+      continue;
     }
+    if (
+      Date.parse(generated.slot.invoice.expiresAt) / 1_000 -
+        responseNowSeconds <
+      policy.minimumInvoiceRemainingSeconds
+    ) {
+      results.push(
+        failureSlot(
+          generated.request,
+          new InfrastructureError(
+            "INVALID_BOLT11",
+            "The provider invoice became too close to expiry before the batch completed.",
+          ),
+        ),
+      );
+      continue;
+    }
+    if (
+      invoices.has(generated.slot.invoice.bolt11) ||
+      hashes.has(generated.slot.invoice.paymentHash)
+    ) {
+      results.push(
+        failureSlot(
+          generated.request,
+          new InfrastructureError(
+            "DUPLICATE_PAYMENT_HASH",
+            "The provider reused an invoice or payment hash.",
+          ),
+        ),
+      );
+      continue;
+    }
+    invoices.add(generated.slot.invoice.bolt11);
+    hashes.add(generated.slot.invoice.paymentHash);
+    results.push(generated.slot);
+    if (generated.providerCommentStatus !== undefined)
+      commentStatuses.push(generated.providerCommentStatus);
+    if (generated.paymentDescriptionStatus !== undefined)
+      descriptionStatuses.push(generated.paymentDescriptionStatus);
   }
 
   const completedCount = results.filter(

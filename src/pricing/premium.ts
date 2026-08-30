@@ -281,7 +281,12 @@ export class KimchiPremiumService {
     domesticPriceKrw: bigint,
   ): Promise<KimchiPremiumInformation> {
     const nowMs = this.clock();
-    let reference = await this.cache.get();
+    let reference: PremiumReference | null = null;
+    try {
+      reference = await this.cache.get();
+    } catch {
+      // Cache availability is optional; fetch a fresh reference below.
+    }
     if (
       !reference ||
       nowMs - Date.parse(reference.retrievedAt) >
@@ -289,7 +294,11 @@ export class KimchiPremiumService {
       nowMs - Date.parse(reference.observedAt) > this.policy.maxObservationAgeMs
     ) {
       reference = await this.adapter.fetchReference();
-      await this.cache.put(reference);
+      try {
+        await this.cache.put(reference);
+      } catch {
+        // A cache write must not hide a valid premium reference.
+      }
     }
     const referencePriceKrw = BigInt(reference.internationalPriceKrw);
     const ratioBasisPoints = roundHalfUp(

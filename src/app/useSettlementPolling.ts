@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 
-import { fetchSettlement } from "./api";
+import { ApiClientError, fetchSettlement } from "./api";
 import {
   isSlotPollable,
   nextPollingDelay,
+  settlementIdentityKey,
+  settlementInvoiceIdentity,
   transitionAfterSettlementCheck,
 } from "./polling";
-import { markExpiredSlots } from "./session";
+import { disableAutomaticVerification, markExpiredSlots } from "./session";
 import type { SettlementSession } from "./types";
 
 export function useSettlementPolling(
@@ -26,8 +28,8 @@ export function useSettlementPolling(
     if (!sessionId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const failures = new Map<number, number>();
-    const nextDue = new Map<number, number>();
+    const failures = new Map<string, number>();
+    const nextDue = new Map<string, number>();
 
     const schedule = (delay: number) => {
       timer = setTimeout(() => void tick(), delay);
@@ -44,44 +46,60 @@ export function useSettlementPolling(
         return;
       }
 
-      for (const slot of current.slots) {
-        if (
-          cancelled ||
-          !isSlotPollable(slot, now) ||
-          (nextDue.get(slot.slotNumber) ?? 0) > now
-        ) {
-          continue;
-        }
-        const token = slot.invoice?.verificationToken;
-        if (!token) continue;
-        try {
+      const due = current.slots.flatMap((slot) => {
+        if (!isSlotPollable(slot, now)) return [];
+        const identity = settlementInvoiceIdentity(slot);
+        if (!identity) return [];
+        const key = settlementIdentityKey(identity);
+        return (nextDue.get(key) ?? 0) <= now ? [{ slot, identity, key }] : [];
+      });
+      await Promise.all(
+        due.map(async ({ slot, identity, key }) => {
           const invoice = slot.invoice;
-          if (!invoice) continue;
-          const response = await fetchSettlement({
-            verificationToken: token,
-            paymentHash: invoice.paymentHash,
-            bolt11: invoice.bolt11,
-          });
-          if (cancelled) return;
-          failures.set(slot.slotNumber, 0);
-          nextDue.set(slot.slotNumber, Date.now() + nextPollingDelay(0));
-          updateSession((value) =>
-            transitionAfterSettlementCheck(
-              value,
-              slot.slotNumber,
-              response,
-              new Date(),
-            ),
-          );
-        } catch {
-          const failureCount = (failures.get(slot.slotNumber) ?? 0) + 1;
-          failures.set(slot.slotNumber, failureCount);
-          nextDue.set(
-            slot.slotNumber,
-            Date.now() + nextPollingDelay(failureCount),
-          );
-        }
-      }
+          if (!invoice) return;
+          try {
+            const response = await fetchSettlement({
+              verificationToken: identity.verificationToken,
+              paymentHash: identity.paymentHash,
+              bolt11: invoice.bolt11,
+            });
+            if (cancelled) return;
+            failures.set(key, 0);
+            nextDue.set(key, Date.now() + nextPollingDelay(0));
+            updateSession((value) =>
+              transitionAfterSettlementCheck(
+                value,
+                identity,
+                response,
+                new Date(),
+              ),
+            );
+          } catch (cause) {
+            if (cancelled) return;
+            const failureCount = (failures.get(key) ?? 0) + 1;
+            const permanentFailure =
+              cause instanceof ApiClientError && !cause.retryable;
+            if (permanentFailure) {
+              failures.delete(key);
+              nextDue.delete(key);
+              updateSession((value) =>
+                disableAutomaticVerification(value, identity, new Date()),
+              );
+              return;
+            }
+            failures.set(key, failureCount);
+            const retryAfterSeconds =
+              cause instanceof ApiClientError &&
+              cause.retryAfterSeconds !== undefined
+                ? cause.retryAfterSeconds
+                : undefined;
+            nextDue.set(
+              key,
+              Date.now() + nextPollingDelay(failureCount, retryAfterSeconds),
+            );
+          }
+        }),
+      );
       schedule(1_000);
     };
 

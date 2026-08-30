@@ -150,6 +150,90 @@ describe("sats direct-input distribution", () => {
   });
 });
 
+describe("cross-mode distribution invariants", () => {
+  it.each([true, false])(
+    "uses the same total-preserving policy for KRW and sats when excludePayer=%s",
+    (excludePayer) => {
+      const exactOneKrwPerSatPrice = 100_000_000n;
+      const maximumSafeTotal = BigInt(Number.MAX_SAFE_INTEGER);
+
+      for (let people = 2; people <= 10; people += 1) {
+        const smallTotals = Array.from({ length: people * 4 }, (_, index) =>
+          BigInt(people + index),
+        );
+        const totals = [
+          ...smallTotals,
+          maximumSafeTotal - BigInt(people),
+          maximumSafeTotal - 1n,
+          maximumSafeTotal,
+        ];
+
+        for (const total of totals) {
+          const krwPlan = createKrwSplitPlan(
+            total,
+            people,
+            excludePayer,
+            exactOneKrwPerSatPrice,
+          );
+          const satsPlan = createSatsSplitPlan(total, people, excludePayer);
+
+          expect(krwPlan.invoiceCount).toBe(satsPlan.invoiceCount);
+          expect(krwPlan.invoiceShares).toEqual(satsPlan.invoiceShares);
+          expect(krwPlan.targetSats).toEqual(satsPlan.invoiceShares);
+          expect(krwPlan.payerShareKrw).toBe(satsPlan.payerShareSats);
+          expect(
+            sumAmounts(krwPlan.invoiceShares) + (krwPlan.payerShareKrw ?? 0n),
+          ).toBe(total);
+          expect(
+            sumAmounts(satsPlan.invoiceShares) +
+              (satsPlan.payerShareSats ?? 0n),
+          ).toBe(total);
+        }
+      }
+    },
+  );
+
+  it("keeps every remainder with the payer when excluded and assigns it to leading slots otherwise", () => {
+    const exactOneKrwPerSatPrice = 100_000_000n;
+
+    for (let people = 2; people <= 10; people += 1) {
+      for (
+        let total = BigInt(people);
+        total < BigInt(people * 8);
+        total += 1n
+      ) {
+        const quotient = total / BigInt(people);
+        const remainder = Number(total % BigInt(people));
+
+        for (const mode of ["krw", "sats"] as const) {
+          const excluded =
+            mode === "krw"
+              ? createKrwSplitPlan(total, people, true, exactOneKrwPerSatPrice)
+              : createSatsSplitPlan(total, people, true);
+          const included =
+            mode === "krw"
+              ? createKrwSplitPlan(total, people, false, exactOneKrwPerSatPrice)
+              : createSatsSplitPlan(total, people, false);
+
+          expect(excluded.invoiceShares).toEqual(
+            Array.from({ length: people - 1 }, () => quotient),
+          );
+          expect(
+            "payerShareKrw" in excluded
+              ? excluded.payerShareKrw
+              : excluded.payerShareSats,
+          ).toBe(quotient + BigInt(remainder));
+          expect(included.invoiceShares).toEqual(
+            Array.from({ length: people }, (_, index) =>
+              index < remainder ? quotient + 1n : quotient,
+            ),
+          );
+        }
+      }
+    }
+  });
+});
+
 describe("KRW to sats conversion", () => {
   it("converts an exactly divisible amount", () => {
     expect(krwToSats(1_000n, 100_000_000n)).toBe(1_000n);
