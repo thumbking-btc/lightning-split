@@ -177,7 +177,7 @@ describe("v1 mobile accessibility states", () => {
     expect(deleteRecord).toContain("이 정산 기록 삭제");
   });
 
-  it("labels completion without leaving a payable QR or copy action", () => {
+  it("keeps participant labels before payment and makes manual completion reversible", () => {
     const slot: ClientSlot = {
       slotNumber: 1,
       targetSats: "1000",
@@ -203,13 +203,15 @@ describe("v1 mobile accessibility states", () => {
         onAnnotate={vi.fn()}
         onRetry={vi.fn()}
         onManualConfirm={vi.fn()}
+        onUndoManualConfirm={vi.fn()}
       />,
     );
-    expect(html).toContain("사용자 확인");
-    expect(html).toContain("누가 보냈나요?");
-    expect(html).toContain("라이트닝 네트워크가 인증한 송금자");
+    expect(html).toContain("직접 확인 완료");
+    expect(html).toContain("이 결제의 참여자");
+    expect(html).toContain("결제 QR이나 라이트닝 네트워크에는 포함되지 않습니다");
+    expect(html).toContain("완료 표시 취소");
+    expect(html).not.toContain("누가 보냈나요?");
     expect(html).not.toContain("결제 요청 복사");
-    expect(html).not.toContain("QR 생성 중");
 
     const settledHtml = renderToStaticMarkup(
       <InvoiceCard
@@ -223,13 +225,14 @@ describe("v1 mobile accessibility states", () => {
         onAnnotate={vi.fn()}
         onRetry={vi.fn()}
         onManualConfirm={vi.fn()}
+        onUndoManualConfirm={vi.fn()}
       />,
     );
     expect(settledHtml).not.toContain("결제 요청 복사");
-    expect(settledHtml).not.toContain("QR 생성 중");
+    expect(settledHtml).not.toContain("완료 표시 취소");
   });
 
-  it("keeps automatic verification primary while preserving a direct fallback", () => {
+  it("states automatic, delayed, and manual verification modes explicitly", () => {
     const pending: ClientSlot = {
       slotNumber: 1,
       targetSats: "1000",
@@ -244,7 +247,7 @@ describe("v1 mobile accessibility states", () => {
         payeeNodeId: `02${"11".repeat(32)}`,
         featureBits: [],
         providerDomain: "wallet.example",
-        verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+        verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
       },
     };
     const renderCard = (slot: ClientSlot) =>
@@ -256,20 +259,31 @@ describe("v1 mobile accessibility states", () => {
           onAnnotate={vi.fn()}
           onRetry={vi.fn()}
           onManualConfirm={vi.fn()}
+          onUndoManualConfirm={vi.fn()}
         />,
       );
 
     const pendingHtml = renderCard(pending);
-    expect(pendingHtml).not.toContain("결제 완료로 표시");
+    expect(pendingHtml).toContain("결제 대기 · 자동 확인 중");
+    expect(pendingHtml).toContain("입금이 확인되면 자동으로 완료됩니다");
     expect(pendingHtml).toContain("직접 확인 후 완료로 표시");
-    expect(pendingHtml).toContain("결제 요청 복사");
+    expect(pendingHtml.indexOf("이 결제의 참여자")).toBeLessThan(
+      pendingHtml.indexOf("qr-shell"),
+    );
 
     const delayedHtml = renderCard({
       ...pending,
       verificationDelayed: true,
     });
+    expect(delayedHtml).toContain("자동 확인 지연 · 직접 확인 가능");
     expect(delayedHtml).toContain("결제 완료로 표시");
-    expect(delayedHtml).toContain("결제 요청 복사");
+
+    const { verificationToken: _verificationToken, ...manualInvoice } =
+      pending.invoice!;
+    void _verificationToken;
+    const manualHtml = renderCard({ ...pending, invoice: manualInvoice });
+    expect(manualHtml).toContain("결제 대기 · 직접 확인 필요");
+    expect(manualHtml).toContain("자동 확인을 사용할 수 없습니다");
 
     const verifyingHtml = renderCard({
       ...pending,
@@ -303,6 +317,7 @@ describe("v1 mobile accessibility states", () => {
         onAnnotate={vi.fn()}
         onRetry={vi.fn()}
         onManualConfirm={vi.fn()}
+        onUndoManualConfirm={vi.fn()}
       />,
     );
     expect(html.match(/qr-shell/gu)).toHaveLength(1);
@@ -330,6 +345,7 @@ describe("v1 mobile accessibility states", () => {
         onAnnotate={vi.fn()}
         onRetry={vi.fn()}
         onManualConfirm={vi.fn()}
+        onUndoManualConfirm={vi.fn()}
       />,
     );
     expect(html).toContain("필수 송금자 정보");
@@ -361,11 +377,11 @@ describe("v1 mobile accessibility states", () => {
         onAnnotate={vi.fn()}
         onRetry={vi.fn()}
         onManualConfirm={vi.fn()}
+        onUndoManualConfirm={vi.fn()}
       />,
     );
     expect(html).toContain("기기에 안전하게 저장");
     expect(html).not.toContain("결제 요청 복사");
-    expect(html).not.toContain("QR 생성 중");
     expect(html).not.toContain("결제 완료로 표시");
   });
 });
