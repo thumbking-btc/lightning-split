@@ -105,6 +105,12 @@ export async function checkSettlement(
     }
     preimagePresent = true;
   }
+  if (preimagePresent && !value.settled) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "The settlement response contradicts its payment preimage.",
+    );
+  }
   return Object.freeze({
     status: value.settled ? "settled" : "unsettled",
     settled: value.settled,

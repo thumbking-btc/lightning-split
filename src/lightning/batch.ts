@@ -1,6 +1,11 @@
 import type { LightningPolicy } from "../config/policies";
 import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
-import type { FailedInvoiceSlot, PendingInvoiceSlot } from "../domain/models";
+import type {
+  DeferredInvoiceSlot,
+  FailedInvoiceSlot,
+  PendingInvoiceSlot,
+  ProviderCommentStatus,
+} from "../domain/models";
 import { InfrastructureError } from "../infrastructure/errors";
 import { Bolt11InvoiceError, validateBolt11Invoice } from "./bolt11";
 import type { LnurlPayDiscovery, LnurlPayClient } from "./lnurl";
@@ -22,9 +27,12 @@ export interface GenerateInvoiceBatchInput {
 
 export interface GenerateInvoiceBatchResult {
   readonly discovery: LnurlPayDiscovery;
-  readonly slots: readonly (PendingInvoiceSlot | FailedInvoiceSlot)[];
+  readonly slots: readonly (
+    PendingInvoiceSlot | FailedInvoiceSlot | DeferredInvoiceSlot
+  )[];
   readonly completedCount: number;
   readonly failedCount: number;
+  readonly providerCommentStatus?: ProviderCommentStatus;
 }
 
 export interface BatchDependencies {
@@ -52,20 +60,6 @@ function failureSlot(
       retryable: known ? error.retryable : false,
     },
   };
-}
-
-function shouldAbort(error: unknown): boolean {
-  return (
-    error instanceof Bolt11InvoiceError ||
-    (error instanceof InfrastructureError &&
-      [
-        "TIMEOUT",
-        "NETWORK_ERROR",
-        "RATE_LIMITED",
-        "DUPLICATE_PAYMENT_HASH",
-        "INVALID_BOLT11",
-      ].includes(error.code))
-  );
 }
 
 function validateBatchInput(
@@ -119,38 +113,13 @@ function providerCommentForDiscovery(
   comment: string | undefined,
   discovery: LnurlPayDiscovery,
 ): string | undefined {
-  if (comment === undefined || discovery.commentAllowed === 0) return undefined;
-  if ([...comment].length > discovery.commentAllowed) {
-    throw new InfrastructureError(
-      "COMMENT_TOO_LONG",
-      `이 Lightning Address는 정산 메모를 ${discovery.commentAllowed}자까지 지원합니다. 메모를 줄여 다시 시도하십시오.`,
-    );
-  }
+  if (
+    comment === undefined ||
+    discovery.commentAllowed === 0 ||
+    [...comment].length > discovery.commentAllowed
+  )
+    return undefined;
   return comment;
-}
-
-function assertDiscoverySupportsBatch(
-  discovery: LnurlPayDiscovery,
-  slots: readonly InvoiceSlotRequest[],
-): void {
-  if (discovery.mandatoryPayerData.length > 0) {
-    throw new InfrastructureError(
-      "PAYER_DATA_REQUIRED",
-      "The provider requires payer data.",
-    );
-  }
-  for (const slot of slots) {
-    const amountMsat = slot.targetSats * 1_000n;
-    if (
-      amountMsat < discovery.minSendableMsat ||
-      amountMsat > discovery.maxSendableMsat
-    ) {
-      throw new InfrastructureError(
-        "AMOUNT_OUT_OF_RANGE",
-        `Slot ${slot.slotNumber} is outside the provider amount range.`,
-      );
-    }
-  }
 }
 
 export async function generateInvoiceBatch(
@@ -161,36 +130,30 @@ export async function generateInvoiceBatch(
   const now = dependencies.now ?? Date.now;
   validateBatchInput(input, policy);
   const discovery = await dependencies.client.discover(input.address);
-  assertDiscoverySupportsBatch(discovery, input.slots);
-  const providerComment = providerCommentForDiscovery(
-    input.providerComment,
-    discovery,
-  );
-  const results: (PendingInvoiceSlot | FailedInvoiceSlot)[] = [];
+  const results: (
+    PendingInvoiceSlot | FailedInvoiceSlot | DeferredInvoiceSlot
+  )[] = [];
   const invoices = new Set<string>(input.excludedInvoices ?? []);
   const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
-  let abortCause: unknown;
+  const commentStatuses: ProviderCommentStatus[] = [];
+  let deferRemaining = false;
 
-  for (const slot of input.slots) {
-    if (abortCause) {
-      results.push(
-        failureSlot(
-          slot,
-          new InfrastructureError(
-            "BATCH_ABORTED",
-            "The remaining batch was not requested after a safety failure.",
-            {
-              retryable: true,
-              cause: abortCause,
-            },
-          ),
-        ),
-      );
+  for (const [index, slot] of input.slots.entries()) {
+    if (deferRemaining) {
+      results.push({ ...slot, status: "deferred" });
       continue;
     }
     try {
+      const slotDiscovery =
+        index === 0
+          ? discovery
+          : await dependencies.client.discover(input.address);
+      const providerComment = providerCommentForDiscovery(
+        input.providerComment,
+        slotDiscovery,
+      );
       const callback = await dependencies.client.requestInvoice(
-        discovery,
+        slotDiscovery,
         slot.targetSats,
         {
           ...(providerComment !== undefined
@@ -202,6 +165,7 @@ export async function generateInvoiceBatch(
       try {
         validated = validateBolt11Invoice(callback.invoice, {
           expectedSats: slot.targetSats,
+          expectedDescription: slotDiscovery.metadata,
           nowSeconds: Math.floor(now() / 1_000),
           minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
         });
@@ -236,32 +200,48 @@ export async function generateInvoiceBatch(
           expiresAt: new Date(validated.expiresAt * 1_000).toISOString(),
           payeeNodeId: validated.payeeNodeId,
           featureBits: validated.featureBits,
+          disposable: callback.disposable,
           ...(callback.verifyUrl !== undefined
             ? { verifyUrl: callback.verifyUrl }
             : {}),
           provider: {
-            domain: discovery.domain,
-            discoveryUrl: discovery.discoveryUrl,
-            callbackUrl: discovery.callbackUrl,
+            domain: slotDiscovery.domain,
+            discoveryUrl: slotDiscovery.discoveryUrl,
+            callbackUrl: slotDiscovery.callbackUrl,
           },
         },
         settlementCheck: callback.verifyUrl
           ? { status: "notChecked" }
           : { status: "notAvailable" },
       });
+      if (input.providerComment !== undefined)
+        commentStatuses.push(
+          callback.commentSent ? "forwarded" : "unsupported",
+        );
+      if (callback.disposable && index < input.slots.length - 1)
+        deferRemaining = true;
     } catch (error) {
       results.push(failureSlot(slot, error));
-      if (shouldAbort(error)) abortCause = error;
     }
   }
 
   const completedCount = results.filter(
     (slot) => slot.status === "pending",
   ).length;
+  const failedCount = results.filter((slot) => slot.status === "failed").length;
+  const providerCommentStatus =
+    input.providerComment === undefined || commentStatuses.length === 0
+      ? undefined
+      : commentStatuses.every((status) => status === "forwarded")
+        ? ("forwarded" as const)
+        : commentStatuses.every((status) => status === "unsupported")
+          ? ("unsupported" as const)
+          : ("partial" as const);
   return Object.freeze({
     discovery,
     slots: Object.freeze(results),
     completedCount,
-    failedCount: results.length - completedCount,
+    failedCount,
+    ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
   });
 }

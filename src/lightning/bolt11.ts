@@ -133,7 +133,10 @@ function exactlyOne(
   return entry;
 }
 
-function validateDescription(fields: ReadonlyMap<string, number[][]>): void {
+function validateDescription(
+  fields: ReadonlyMap<string, number[][]>,
+  expectedDescription?: string,
+): void {
   const descriptions = fields.get("d") ?? [];
   const hashes = fields.get("h") ?? [];
   if (
@@ -149,7 +152,19 @@ function validateDescription(fields: ReadonlyMap<string, number[][]>): void {
   const hash = hashes[0];
   if (hash && hash.length !== 52)
     return fail("DESCRIPTION", "Invalid description hash.");
-  if (hash) wordsToBytesStrict(hash);
+  if (hash) {
+    const decodedHash = wordsToBytesStrict(hash);
+    if (
+      expectedDescription !== undefined &&
+      bytesToHex(decodedHash) !==
+        bytesToHex(sha256(new TextEncoder().encode(expectedDescription)))
+    ) {
+      return fail(
+        "DESCRIPTION",
+        "Invoice description hash does not match LNURL metadata.",
+      );
+    }
+  }
   const description = descriptions[0];
   if (description) {
     const bytes = wordsToBytesStrict(description);
@@ -241,6 +256,7 @@ function bytesToHex(bytes: Uint8Array): string {
 
 export interface Bolt11ValidationOptions {
   readonly expectedSats: bigint;
+  readonly expectedDescription?: string;
   readonly nowSeconds?: number;
   readonly minimumRemainingSeconds?: number;
 }
@@ -321,9 +337,7 @@ export function validateBolt11Invoice(
   wordsToBytesStrict(
     exactlyOne(fields, "s", 52, "One payment secret is required."),
   );
-  validateDescription(fields);
-  if ((fields.get("f") ?? []).length > 0)
-    return fail("FALLBACK", "On-chain fallback is unsupported.");
+  validateDescription(fields, options.expectedDescription);
   const payees = fields.get("n") ?? [];
   if (payees.length > 1 || (payees[0] && payees[0].length !== 53))
     return fail("PAYEE", "Invalid payee tag.");

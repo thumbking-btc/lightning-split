@@ -9,7 +9,7 @@ import {
   sanitizeProviderReason,
 } from "../infrastructure/validation";
 
-const USERNAME_PATTERN = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}$/u;
+const USERNAME_PATTERN = /^[a-z0-9._+-]{1,64}$/u;
 
 export interface NormalizedLightningAddress {
   readonly address: string;
@@ -23,7 +23,7 @@ export interface LnurlPayDiscovery extends NormalizedLightningAddress {
   readonly minSendableMsat: bigint;
   readonly maxSendableMsat: bigint;
   readonly metadata: string;
-  readonly metadataEntries: readonly (readonly [string, string])[];
+  readonly metadataEntries: readonly (readonly [string, ...unknown[]])[];
   readonly payerData: Readonly<
     Record<string, { readonly mandatory: boolean }>
   > | null;
@@ -35,6 +35,8 @@ export interface LnurlPayDiscovery extends NormalizedLightningAddress {
 
 export interface LnurlInvoiceResponse {
   readonly invoice: string;
+  readonly disposable: boolean;
+  readonly commentSent: boolean;
   readonly verifyUrl?: string;
 }
 
@@ -85,9 +87,9 @@ export function normalizeLightningAddress(
 
 function parseMetadata(value: unknown): {
   raw: string;
-  entries: readonly (readonly [string, string])[];
+  entries: readonly (readonly [string, ...unknown[]])[];
 } {
-  if (typeof value !== "string" || value.length > 16_384) {
+  if (typeof value !== "string" || value.length > 150_000) {
     throw new InfrastructureError(
       "INVALID_RESPONSE",
       "LNURL metadata is invalid.",
@@ -108,9 +110,8 @@ function parseMetadata(value: unknown): {
     !decoded.every(
       (entry) =>
         Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        typeof entry[1] === "string",
+        entry.length >= 2 &&
+        typeof entry[0] === "string",
     )
   ) {
     throw new InfrastructureError(
@@ -118,7 +119,18 @@ function parseMetadata(value: unknown): {
       "LNURL metadata entries are invalid.",
     );
   }
-  return { raw: value, entries: decoded as [string, string][] };
+  const entries = decoded as [string, ...unknown[]][];
+  if (
+    !entries.some(
+      (entry) => entry[0] === "text/plain" && typeof entry[1] === "string",
+    )
+  ) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "LNURL metadata has no text/plain description.",
+    );
+  }
+  return { raw: value, entries };
 }
 
 function parsePayerData(value: unknown): {
@@ -126,17 +138,12 @@ function parsePayerData(value: unknown): {
   mandatory: readonly string[];
 } {
   if (value === undefined) return { payerData: null, mandatory: [] };
-  if (!isRecord(value))
-    throw new InfrastructureError("INVALID_RESPONSE", "payerData is invalid.");
+  if (!isRecord(value)) return { payerData: null, mandatory: [] };
   const result: Record<string, { readonly mandatory: boolean }> = {};
   const mandatory: string[] = [];
   for (const [key, descriptor] of Object.entries(value)) {
-    if (!isRecord(descriptor) || typeof descriptor.mandatory !== "boolean") {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "payerData is invalid.",
-      );
-    }
+    if (!isRecord(descriptor) || typeof descriptor.mandatory !== "boolean")
+      continue;
     result[key] = Object.freeze({ mandatory: descriptor.mandatory });
     if (descriptor.mandatory) mandatory.push(key);
   }
@@ -196,34 +203,25 @@ export class LnurlPayClient {
     }
     const metadata = parseMetadata(value.metadata);
     const payerData = parsePayerData(value.payerData);
-    const commentAllowed =
-      value.commentAllowed === undefined
-        ? 0
-        : Number(parseProviderInteger(value.commentAllowed, "commentAllowed"));
-    if (!Number.isSafeInteger(commentAllowed) || commentAllowed > 65_535) {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "commentAllowed is invalid.",
-      );
+    let commentAllowed = 0;
+    if (value.commentAllowed !== undefined) {
+      try {
+        const parsed = Number(
+          parseProviderInteger(value.commentAllowed, "commentAllowed"),
+        );
+        if (Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 65_535)
+          commentAllowed = parsed;
+      } catch {
+        // LUD-12 is optional. A malformed capability must not break LUD-06.
+      }
     }
-    if (
-      value.allowsNostr !== undefined &&
-      typeof value.allowsNostr !== "boolean"
-    ) {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "allowsNostr is invalid.",
-      );
-    }
-    if (
-      value.nostrPubkey !== undefined &&
-      typeof value.nostrPubkey !== "string"
-    ) {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "nostrPubkey is invalid.",
-      );
-    }
+    const nostrPubkey =
+      value.allowsNostr === true &&
+      typeof value.nostrPubkey === "string" &&
+      /^[0-9a-f]{64}$/iu.test(value.nostrPubkey)
+        ? value.nostrPubkey.toLowerCase()
+        : undefined;
+    const allowsNostr = nostrPubkey !== undefined;
     return Object.freeze({
       ...normalized,
       callbackUrl,
@@ -234,10 +232,8 @@ export class LnurlPayClient {
       payerData: payerData.payerData,
       mandatoryPayerData: payerData.mandatory,
       commentAllowed,
-      allowsNostr: value.allowsNostr ?? false,
-      ...(typeof value.nostrPubkey === "string"
-        ? { nostrPubkey: value.nostrPubkey }
-        : {}),
+      allowsNostr,
+      ...(nostrPubkey === undefined ? {} : { nostrPubkey }),
     });
   }
 
@@ -309,17 +305,19 @@ export class LnurlPayClient {
         "The provider did not return a valid invoice string.",
       );
     }
-    if (value.verify !== undefined && typeof value.verify !== "string") {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "The provider verify URL is invalid.",
-      );
+    let verifyUrl: string | undefined;
+    if (typeof value.verify === "string") {
+      try {
+        verifyUrl = safeHttpsUrl(value.verify).toString();
+      } catch {
+        // LUD-21 is optional. Invalid verify data falls back to manual checks.
+      }
     }
     return Object.freeze({
       invoice: value.pr,
-      ...(typeof value.verify === "string"
-        ? { verifyUrl: safeHttpsUrl(value.verify).toString() }
-        : {}),
+      disposable: value.disposable === false ? false : true,
+      commentSent: options.comment !== undefined,
+      ...(verifyUrl === undefined ? {} : { verifyUrl }),
     });
   }
 }

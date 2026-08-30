@@ -2,6 +2,7 @@ import type {
   ApiErrorDto,
   BatchInvoiceRequestDto,
   BatchInvoiceResponseDto,
+  DeferredInvoiceSlotDto,
   FailedInvoiceSlotDto,
   PendingInvoiceSlotDto,
   PriceResponseDto,
@@ -66,6 +67,8 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
     !Array.isArray(value.invoice.featureBits) ||
     !value.invoice.featureBits.every((bit) => typeof bit === "number") ||
     typeof value.invoice.providerDomain !== "string" ||
+    (value.invoice.disposable !== undefined &&
+      typeof value.invoice.disposable !== "boolean") ||
     (value.invoice.verificationToken !== undefined &&
       typeof value.invoice.verificationToken !== "string") ||
     (value.krwShare !== undefined && typeof value.krwShare !== "string")
@@ -91,10 +94,37 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
       payeeNodeId: value.invoice.payeeNodeId,
       featureBits: value.invoice.featureBits,
       providerDomain: value.invoice.providerDomain,
+      ...(typeof value.invoice.disposable === "boolean"
+        ? { disposable: value.invoice.disposable }
+        : {}),
       ...(typeof value.invoice.verificationToken === "string"
         ? { verificationToken: value.invoice.verificationToken }
         : {}),
     },
+  };
+}
+
+function assertDeferredSlot(value: unknown): DeferredInvoiceSlotDto {
+  if (
+    !isRecord(value) ||
+    value.status !== "deferred" ||
+    typeof value.slotNumber !== "number" ||
+    typeof value.targetSats !== "string" ||
+    typeof value.attempt !== "number" ||
+    (value.krwShare !== undefined && typeof value.krwShare !== "string")
+  ) {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "대기 응답 형식이 올바르지 않습니다.",
+      false,
+    );
+  }
+  return {
+    status: "deferred",
+    slotNumber: value.slotNumber,
+    targetSats: value.targetSats,
+    attempt: value.attempt,
+    ...(typeof value.krwShare === "string" ? { krwShare: value.krwShare } : {}),
   };
 }
 
@@ -196,6 +226,10 @@ export async function requestInvoiceBatch(
     !isRecord(value.provider) ||
     typeof value.provider.domain !== "string" ||
     typeof value.provider.commentAllowed !== "number" ||
+    (value.provider.commentStatus !== undefined &&
+      value.provider.commentStatus !== "forwarded" &&
+      value.provider.commentStatus !== "unsupported" &&
+      value.provider.commentStatus !== "partial") ||
     typeof value.provider.automaticSettlementAvailable !== "boolean" ||
     !Array.isArray(value.slots) ||
     typeof value.completedCount !== "number" ||
@@ -210,13 +244,20 @@ export async function requestInvoiceBatch(
   const slots = value.slots.map((slot) =>
     isRecord(slot) && slot.status === "pending"
       ? assertPendingSlot(slot)
-      : assertFailedSlot(slot),
+      : isRecord(slot) && slot.status === "deferred"
+        ? assertDeferredSlot(slot)
+        : assertFailedSlot(slot),
   );
   return {
     ok: true,
     provider: {
       domain: value.provider.domain,
       commentAllowed: value.provider.commentAllowed,
+      ...(value.provider.commentStatus === "forwarded" ||
+      value.provider.commentStatus === "unsupported" ||
+      value.provider.commentStatus === "partial"
+        ? { commentStatus: value.provider.commentStatus }
+        : {}),
       automaticSettlementAvailable: value.provider.automaticSettlementAvailable,
     },
     slots,

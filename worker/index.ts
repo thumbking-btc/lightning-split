@@ -1,6 +1,7 @@
 import type {
   ApiErrorDto,
   BatchInvoiceResponseDto,
+  DeferredInvoiceSlotDto,
   FailedInvoiceSlotDto,
   PendingInvoiceSlotDto,
   PriceResponseDto,
@@ -175,13 +176,17 @@ async function handleInvoices(
   assertSameOrigin(request);
   await enforceRateLimit(request, env.INVOICE_RATE_LIMITER, "invoices");
   const input = parseBatchInvoiceRequest(await readBoundedRequestJson(request));
-  const secret = verificationSecret(env);
   const result = await generateInvoiceBatch(input, {
     client: new LnurlPayClient(),
   });
+  let secret: string | undefined;
   const slots = await Promise.all(
     result.slots.map(
-      async (slot): Promise<PendingInvoiceSlotDto | FailedInvoiceSlotDto> => {
+      async (
+        slot,
+      ): Promise<
+        PendingInvoiceSlotDto | FailedInvoiceSlotDto | DeferredInvoiceSlotDto
+      > => {
         const base = {
           slotNumber: slot.slotNumber,
           targetSats: serializeBigIntDecimal(slot.targetSats),
@@ -193,6 +198,7 @@ async function handleInvoices(
         if (slot.status === "failed") {
           return { ...base, status: "failed", failure: slot.failure };
         }
+        if (slot.status === "deferred") return { ...base, status: "deferred" };
         const verificationToken = slot.invoice.verifyUrl
           ? await sealVerificationContext(
               {
@@ -201,7 +207,7 @@ async function handleInvoices(
                 expectedInvoice: slot.invoice.bolt11,
                 expiresAt: slot.invoice.expiresAt,
               },
-              secret,
+              (secret ??= verificationSecret(env)),
             )
           : undefined;
         return {
@@ -216,6 +222,9 @@ async function handleInvoices(
             payeeNodeId: slot.invoice.payeeNodeId,
             featureBits: slot.invoice.featureBits,
             providerDomain: slot.invoice.provider.domain,
+            ...(slot.invoice.disposable === undefined
+              ? {}
+              : { disposable: slot.invoice.disposable }),
             ...(verificationToken === undefined ? {} : { verificationToken }),
           },
         };
@@ -227,6 +236,9 @@ async function handleInvoices(
     provider: {
       domain: result.discovery.domain,
       commentAllowed: result.discovery.commentAllowed,
+      ...(result.providerCommentStatus === undefined
+        ? {}
+        : { commentStatus: result.providerCommentStatus }),
       automaticSettlementAvailable: slots.some(
         (slot) =>
           slot.status === "pending" &&

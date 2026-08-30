@@ -7,6 +7,7 @@ import type {
 
 export type ClientSlotStatus =
   | "generating"
+  | "queued"
   | "pending"
   | "settled"
   | "manuallyConfirmed"
@@ -22,6 +23,7 @@ export interface ClientInvoice {
   readonly payeeNodeId: string;
   readonly featureBits: readonly number[];
   readonly providerDomain: string;
+  readonly disposable?: boolean;
   readonly verificationToken?: string;
 }
 

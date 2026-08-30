@@ -120,4 +120,20 @@ describe("local settlement persistence", () => {
       "1000",
     ]);
   });
+
+  it("restores queued invoices and partial comment delivery", () => {
+    const queued: SettlementSession = {
+      ...SESSION,
+      providerCommentStatus: "partial",
+      slots: [
+        {
+          slotNumber: 1,
+          targetSats: "1000",
+          attempt: 1,
+          status: "queued",
+        },
+      ],
+    };
+    expect(restoreSession(serializeSession(queued))).toEqual(queued);
+  });
 });

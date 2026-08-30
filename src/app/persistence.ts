@@ -35,6 +35,7 @@ function isStoredInvoice(value: unknown): boolean {
       (bit) => Number.isSafeInteger(bit) && Number(bit) >= 0,
     ) &&
     typeof value.providerDomain === "string" &&
+    (value.disposable === undefined || typeof value.disposable === "boolean") &&
     (value.verificationToken === undefined ||
       (typeof value.verificationToken === "string" &&
         /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u.test(
@@ -80,7 +81,8 @@ function isStoredSlot(value: unknown): boolean {
   ) {
     return false;
   }
-  if (value.status === "generating") return value.invoice === undefined;
+  if (value.status === "generating" || value.status === "queued")
+    return value.invoice === undefined;
   if (value.status === "failed") {
     return (
       isRecord(value.failure) &&
@@ -134,7 +136,8 @@ function isSettlementSession(value: unknown): value is SettlementSession {
       isCanonicalPositiveDecimal(value.payerShareSats)) &&
     (value.providerCommentStatus === undefined ||
       value.providerCommentStatus === "forwarded" ||
-      value.providerCommentStatus === "unsupported") &&
+      value.providerCommentStatus === "unsupported" ||
+      value.providerCommentStatus === "partial") &&
     (value.providerDomain === undefined ||
       typeof value.providerDomain === "string") &&
     isStoredPaymentHashList(value.issuedPaymentHashes) &&

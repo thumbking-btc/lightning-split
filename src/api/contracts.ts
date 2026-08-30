@@ -53,8 +53,17 @@ export interface PendingInvoiceSlotDto {
     readonly payeeNodeId: string;
     readonly featureBits: readonly number[];
     readonly providerDomain: string;
+    readonly disposable?: boolean;
     readonly verificationToken?: string;
   };
+}
+
+export interface DeferredInvoiceSlotDto {
+  readonly status: "deferred";
+  readonly slotNumber: number;
+  readonly krwShare?: string;
+  readonly targetSats: string;
+  readonly attempt: number;
 }
 
 export interface FailedInvoiceSlotDto {
@@ -75,9 +84,12 @@ export interface BatchInvoiceResponseDto {
   readonly provider: {
     readonly domain: string;
     readonly commentAllowed: number;
+    readonly commentStatus?: "forwarded" | "unsupported" | "partial";
     readonly automaticSettlementAvailable: boolean;
   };
-  readonly slots: readonly (PendingInvoiceSlotDto | FailedInvoiceSlotDto)[];
+  readonly slots: readonly (
+    PendingInvoiceSlotDto | FailedInvoiceSlotDto | DeferredInvoiceSlotDto
+  )[];
   readonly completedCount: number;
   readonly failedCount: number;
 }

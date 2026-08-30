@@ -81,4 +81,31 @@ describe("single LUD-21 settlement check", () => {
       }),
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
+
+  it("rejects a valid preimage paired with settled=false", async () => {
+    const preimage = "22".repeat(32);
+    const paymentHash = hex(
+      sha256(
+        Uint8Array.from(
+          preimage.match(/.{2}/gu)!.map((pair) => Number.parseInt(pair, 16)),
+        ),
+      ),
+    );
+    await expect(
+      checkSettlement(
+        {
+          verifyUrl: "https://wallet.example/verify/one",
+          expectedPaymentHash: paymentHash,
+          expectedInvoice: "lnbc-test",
+        },
+        {
+          fetcher: responseFetcher({
+            settled: false,
+            pr: "lnbc-test",
+            preimage,
+          }),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
 });

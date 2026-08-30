@@ -52,6 +52,8 @@ export function createTestBolt11(options: {
   readonly fixtureId: string;
   readonly timestamp?: number;
   readonly expirySeconds?: number;
+  readonly descriptionHashSource?: string;
+  readonly includeFallback?: boolean;
 }): { readonly invoice: string; readonly paymentHash: string } {
   const timestamp = options.timestamp ?? 1_900_000_000;
   const expiry = options.expirySeconds ?? 3_600;
@@ -67,7 +69,15 @@ export function createTestBolt11(options: {
     ...integerWords(BigInt(timestamp), 7),
     ...tag("p", bech32.toWords(paymentHash)),
     ...tag("s", bech32.toWords(paymentSecret)),
-    ...tag("d", bech32.toWords(description)),
+    ...(options.descriptionHashSource === undefined
+      ? tag("d", bech32.toWords(description))
+      : tag(
+          "h",
+          bech32.toWords(
+            sha256(new TextEncoder().encode(options.descriptionHashSource)),
+          ),
+        )),
+    ...(options.includeFallback ? tag("f", [31, 1, 2, 3]) : []),
     ...tag("x", integerWords(BigInt(expiry))),
   ];
   const digest = sha256(

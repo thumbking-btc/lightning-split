@@ -39,7 +39,12 @@ function clientWith(
     discovery: LnurlPayDiscovery,
     amountSats: bigint,
     options?: InvoiceRequestOptions,
-  ) => Promise<{ invoice: string; verifyUrl?: string }>,
+  ) => Promise<{
+    invoice: string;
+    verifyUrl?: string;
+    disposable?: boolean;
+    commentSent?: boolean;
+  }>,
   discovery: LnurlPayDiscovery = DISCOVERY,
 ): {
   readonly client: Pick<LnurlPayClient, "discover" | "requestInvoice">;
@@ -47,7 +52,24 @@ function clientWith(
   readonly callback: ReturnType<typeof vi.fn>;
 } {
   const discover = vi.fn(() => Promise.resolve(discovery));
-  const callback = vi.fn(requestInvoice);
+  const callback = vi.fn(
+    async (
+      currentDiscovery: LnurlPayDiscovery,
+      amountSats: bigint,
+      options?: InvoiceRequestOptions,
+    ) => {
+      const result = await requestInvoice(
+        currentDiscovery,
+        amountSats,
+        options,
+      );
+      return {
+        disposable: result.disposable ?? false,
+        commentSent: result.commentSent ?? options?.comment !== undefined,
+        ...result,
+      };
+    },
+  );
   return { client: { discover, requestInvoice: callback }, discover, callback };
 }
 
@@ -76,7 +98,7 @@ describe("sequential invoice batch generation", () => {
       { address: "user@wallet.example", slots: slots(5) },
       { client: mock.client, now: () => NOW_SECONDS * 1_000 },
     );
-    expect(mock.discover).toHaveBeenCalledTimes(1);
+    expect(mock.discover).toHaveBeenCalledTimes(5);
     expect(mock.callback).toHaveBeenCalledTimes(5);
     expect(maximumActive).toBe(1);
     expect(result.completedCount).toBe(5);
@@ -141,7 +163,7 @@ describe("sequential invoice batch generation", () => {
     expect(mock.callback.mock.calls[0]?.[2]).toEqual({});
   });
 
-  it("rejects an overlong provider comment before requesting any callback", async () => {
+  it("keeps settlement working when a provider-specific comment limit is smaller", async () => {
     const mock = clientWith(
       (_discovery, amountSats) =>
         Promise.resolve({
@@ -153,17 +175,21 @@ describe("sequential invoice batch generation", () => {
       { ...DISCOVERY, commentAllowed: 5 },
     );
 
-    await expect(
-      generateInvoiceBatch(
-        {
-          address: "user@wallet.example",
-          slots: slots(1),
-          providerComment: "123456",
-        },
-        { client: mock.client, now: () => NOW_SECONDS * 1_000 },
-      ),
-    ).rejects.toMatchObject({ code: "COMMENT_TOO_LONG" });
-    expect(mock.callback).not.toHaveBeenCalled();
+    const result = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(1),
+        providerComment: "123456",
+      },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+    expect(result.slots[0]?.status).toBe("pending");
+    expect(result.providerCommentStatus).toBe("unsupported");
+    expect(mock.callback).toHaveBeenCalledWith(
+      { ...DISCOVERY, commentAllowed: 5 },
+      1_000n,
+      {},
+    );
   });
 
   it("keeps successful slots and continues after an ordinary provider failure", async () => {
@@ -198,7 +224,7 @@ describe("sequential invoice batch generation", () => {
     expect(mock.callback).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects a duplicate payment hash and does not request remaining callbacks", async () => {
+  it("rejects duplicate payment hashes independently and still checks every slot", async () => {
     const mock = clientWith((_discovery, amountSats) =>
       Promise.resolve({
         invoice: createTestBolt11({
@@ -224,9 +250,9 @@ describe("sequential invoice batch generation", () => {
       failure: { code: "DUPLICATE_PAYMENT_HASH" },
     });
     expect(result.slots[2]).toMatchObject({
-      failure: { code: "BATCH_ABORTED" },
+      failure: { code: "DUPLICATE_PAYMENT_HASH" },
     });
-    expect(mock.callback).toHaveBeenCalledTimes(2);
+    expect(mock.callback).toHaveBeenCalledTimes(3);
   });
 
   it("rejects an invoice or payment hash reused by a slot retry", async () => {
@@ -250,7 +276,7 @@ describe("sequential invoice batch generation", () => {
     });
   });
 
-  it("stops after an invalid BOLT11 response", async () => {
+  it("isolates invalid BOLT11 responses to their own slots", async () => {
     const mock = clientWith(() => Promise.resolve({ invoice: "lnbc-invalid" }));
     const result = await generateInvoiceBatch(
       { address: "user@wallet.example", slots: slots(2) },
@@ -260,16 +286,16 @@ describe("sequential invoice batch generation", () => {
       failure: { code: "INVALID_BOLT11" },
     });
     expect(result.slots[1]).toMatchObject({
-      failure: { code: "BATCH_ABORTED" },
+      failure: { code: "INVALID_BOLT11" },
     });
-    expect(mock.callback).toHaveBeenCalledTimes(1);
+    expect(mock.callback).toHaveBeenCalledTimes(2);
   });
 
   it.each([
     ["TIMEOUT", undefined],
     ["RATE_LIMITED", 30],
   ] as const)(
-    "stops without hammering the provider after %s",
+    "keeps slot failures independent after %s",
     async (code, retryAfterSeconds) => {
       const mock = clientWith(() =>
         Promise.reject(
@@ -289,7 +315,33 @@ describe("sequential invoice batch generation", () => {
       expect(
         result.slots.slice(1).every((slot) => slot.status === "failed"),
       ).toBe(true);
-      expect(mock.callback).toHaveBeenCalledTimes(1);
+      expect(mock.callback).toHaveBeenCalledTimes(3);
     },
   );
+
+  it("defers later invoices when LUD-11 does not explicitly allow reuse", async () => {
+    let call = 0;
+    const mock = clientWith((_discovery, amountSats) =>
+      Promise.resolve({
+        invoice: createTestBolt11({
+          amountSats,
+          fixtureId: `disposable-${++call}`,
+        }).invoice,
+        disposable: true,
+      }),
+    );
+
+    const result = await generateInvoiceBatch(
+      { address: "user@wallet.example", slots: slots(3) },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+
+    expect(result.slots.map((slot) => slot.status)).toEqual([
+      "pending",
+      "deferred",
+      "deferred",
+    ]);
+    expect(result.failedCount).toBe(0);
+    expect(mock.callback).toHaveBeenCalledTimes(1);
+  });
 });

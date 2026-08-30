@@ -23,6 +23,9 @@ describe("Lightning Address and LNURL-pay", () => {
       discoveryUrl: "https://wallet.example/.well-known/lnurlp/user",
     });
     expect(() => normalizeLightningAddress("user@localhost")).toThrowError();
+    expect(() =>
+      normalizeLightningAddress("user!tag@wallet.example"),
+    ).toThrowError();
   });
 
   it("parses metadata, payerData, comments and provider capabilities", async () => {
@@ -76,6 +79,47 @@ describe("Lightning Address and LNURL-pay", () => {
     expect(calls[1]?.searchParams.get("comment")).toBe("8/30 고깃집 저녁");
     expect(calls[1]?.toString()).not.toContain("고깃집");
     expect(invoice.verifyUrl).toBe("https://wallet.example/verify/one");
+    expect(invoice.commentSent).toBe(true);
+    expect(invoice.disposable).toBe(true);
+  });
+
+  it("keeps LUD-06 working when optional capabilities are malformed", async () => {
+    const fetcher = jsonFetcher((url) =>
+      url.pathname.includes("well-known")
+        ? {
+            tag: "payRequest",
+            callback: "https://wallet.example/callback",
+            minSendable: 1_000,
+            maxSendable: 10_000_000,
+            metadata:
+              '[["text/plain","test"],["application/example",{"future":true}]]',
+            payerData: {
+              name: { mandatory: false },
+              malformed: "ignored",
+            },
+            commentAllowed: "not-an-integer",
+            allowsNostr: true,
+            nostrPubkey: "bad",
+          }
+        : {
+            pr: "lnbc-test",
+            disposable: false,
+            verify: "http://unsafe.example/verify",
+          },
+    );
+    const client = new LnurlPayClient(fetcher);
+    const discovery = await client.discover("user@wallet.example");
+    expect(discovery).toMatchObject({
+      commentAllowed: 0,
+      allowsNostr: false,
+      payerData: { name: { mandatory: false } },
+    });
+    expect(discovery.metadataEntries[1]?.[1]).toEqual({ future: true });
+    await expect(client.requestInvoice(discovery, 1n)).resolves.toEqual({
+      invoice: "lnbc-test",
+      disposable: false,
+      commentSent: false,
+    });
   });
 
   it("rejects mandatory payerData and out-of-range amounts before callback", async () => {

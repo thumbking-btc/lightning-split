@@ -29,6 +29,7 @@ import {
   getSettlementProgress,
   manuallyConfirmSlot,
   markExpiredSlots,
+  prepareQueuedSlot,
   prepareSlotRetry,
   type DraftInput,
   type SettlementPreview,
@@ -90,6 +91,8 @@ function formatRemainingTime(expiresAt: string, nowMs: number): string {
 function slotStatus(slot: ClientSlot): { label: string; tone: string } {
   if (slot.status === "generating")
     return { label: "결제 요청 생성 중", tone: "working" };
+  if (slot.status === "queued")
+    return { label: "앞 결제 완료 후 생성", tone: "muted" };
   if (slot.status === "settled") return { label: "결제 완료", tone: "done" };
   if (slot.status === "manuallyConfirmed")
     return { label: "사용자 확인", tone: "manual" };
@@ -195,6 +198,11 @@ export function InvoiceCard({
       {slot.status === "generating" && (
         <div className="loading-panel" aria-live="polite">
           안전하게 결제 요청을 확인하고 있습니다.
+        </div>
+      )}
+      {slot.status === "queued" && (
+        <div className="loading-panel" aria-live="polite">
+          앞 결제 요청이 끝나면 이 결제만 새로 발급합니다.
         </div>
       )}
       {slot.status === "failed" && (
@@ -663,6 +671,16 @@ export function App() {
 
   const retrySlot = async (slotNumber: number) => {
     if (!session) return;
+    if (
+      session.slots.some(
+        (slot) =>
+          slot.slotNumber !== slotNumber &&
+          (slot.status === "pending" || slot.status === "generating"),
+      )
+    ) {
+      setError("현재 결제 요청을 먼저 완료하거나 만료를 기다리십시오.");
+      return;
+    }
     const excludedPaymentHashes = collectIssuedPaymentHashes(session);
     const excludedInvoices = session.slots.flatMap((slot) =>
       slot.invoice ? [slot.invoice.bolt11] : [],
@@ -738,6 +756,103 @@ export function App() {
       setRetryingSlot(undefined);
     }
   };
+
+  const issueQueuedSlot = useCallback(
+    async (source: SettlementSession, slotNumber: number) => {
+      const excludedPaymentHashes = collectIssuedPaymentHashes(source);
+      const excludedInvoices = source.slots.flatMap((slot) =>
+        slot.invoice ? [slot.invoice.bolt11] : [],
+      );
+      let prepared: SettlementSession;
+      try {
+        prepared = prepareQueuedSlot(source, slotNumber);
+      } catch (cause) {
+        setError(toUserMessage(cause));
+        return;
+      }
+      const target = prepared.slots.find(
+        (slot) => slot.slotNumber === slotNumber,
+      )!;
+      setRetryingSlot(slotNumber);
+      setError(undefined);
+      setSession(prepared);
+      try {
+        const response = await requestInvoiceBatch({
+          address: prepared.lightningAddress,
+          ...(prepared.overallNote
+            ? { providerComment: prepared.overallNote }
+            : {}),
+          slots: [
+            {
+              slotNumber: target.slotNumber,
+              targetSats: target.targetSats,
+              attempt: target.attempt,
+              ...(target.krwShare ? { krwShare: target.krwShare } : {}),
+            },
+          ],
+          excludedPaymentHashes,
+          excludedInvoices,
+        });
+        setSession((current) =>
+          current
+            ? applySlotRetryResponse(
+                current,
+                slotNumber,
+                response,
+                excludedPaymentHashes,
+                excludedInvoices,
+              )
+            : current,
+        );
+      } catch (cause) {
+        const message = toUserMessage(
+          cause,
+          "다음 결제 요청을 만들지 못했습니다.",
+        );
+        setError(message);
+        setSession((current) =>
+          current
+            ? {
+                ...current,
+                slots: current.slots.map((slot) =>
+                  slot.slotNumber === slotNumber && slot.status === "generating"
+                    ? {
+                        ...slot,
+                        status: "failed" as const,
+                        failure: {
+                          code: "QUEUE_FAILED",
+                          message,
+                          retryable: true,
+                        },
+                      }
+                    : slot,
+                ),
+              }
+            : current,
+        );
+      } finally {
+        setRetryingSlot(undefined);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!session || busy || retryingSlot !== undefined) return;
+    if (
+      session.slots.some(
+        (slot) => slot.status === "pending" || slot.status === "generating",
+      )
+    )
+      return;
+    const queued = session.slots.find((slot) => slot.status === "queued");
+    if (!queued) return;
+    const timer = window.setTimeout(
+      () => void issueQueuedSlot(session, queued.slotNumber),
+      0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [busy, issueQueuedSlot, retryingSlot, session]);
 
   const resetSession = async () => {
     try {
@@ -858,9 +973,15 @@ export function App() {
         {session.overallNote &&
           session.providerCommentStatus === "forwarded" && (
             <p className="provider-comment-status" role="status">
-              정산 메모를 지갑에도 전달했습니다.
+              정산 메모를 지원되는 각 지갑 callback에 전달했습니다.
             </p>
           )}
+        {session.overallNote && session.providerCommentStatus === "partial" && (
+          <div className="global-warning" role="status">
+            일부 결제 요청에만 지갑 메모를 전달했습니다. 나머지는 이 기기에
+            저장했습니다.
+          </div>
+        )}
         {session.overallNote &&
           session.providerCommentStatus === "unsupported" && (
             <div className="global-warning" role="status">

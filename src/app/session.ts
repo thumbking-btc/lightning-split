@@ -10,6 +10,7 @@ import {
   sumAmounts,
 } from "../domain/money";
 import type { InputMode, PaymentAnnotation } from "../domain/models";
+import type { ProviderCommentStatus } from "../domain/models";
 import { createLocalSettlementId } from "./localId";
 import type {
   ClientSlot,
@@ -39,6 +40,26 @@ function mergePaymentHashes(
   ...collections: readonly (readonly string[])[]
 ): readonly string[] {
   return Object.freeze([...new Set(collections.flat())]);
+}
+
+function mergeProviderCommentStatus(
+  current: ProviderCommentStatus | undefined,
+  next: ProviderCommentStatus | undefined,
+): ProviderCommentStatus | undefined {
+  if (next === undefined) return current;
+  if (current === undefined || current === next) return next;
+  return "partial";
+}
+
+function inferProviderCommentStatus(
+  response: BatchInvoiceResponseDto,
+): ProviderCommentStatus | undefined {
+  if (response.provider.commentStatus !== undefined)
+    return response.provider.commentStatus;
+  if (response.provider.commentAllowed === 0) return "unsupported";
+  return response.slots.some((slot) => slot.status === "pending")
+    ? "forwarded"
+    : undefined;
 }
 
 export function collectIssuedPaymentHashes(
@@ -150,17 +171,16 @@ export function applyBatchResponse(
   session: SettlementSession,
   response: BatchInvoiceResponseDto,
 ): SettlementSession {
+  const providerCommentStatus = session.overallNote
+    ? mergeProviderCommentStatus(
+        session.providerCommentStatus,
+        inferProviderCommentStatus(response),
+      )
+    : undefined;
   return {
     ...session,
     providerDomain: response.provider.domain,
-    ...(session.overallNote
-      ? {
-          providerCommentStatus:
-            response.provider.commentAllowed > 0
-              ? ("forwarded" as const)
-              : ("unsupported" as const),
-        }
-      : {}),
+    ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       response.slots.flatMap((slot) =>
@@ -170,7 +190,9 @@ export function applyBatchResponse(
     slots: response.slots.map((slot): ClientSlot =>
       slot.status === "pending"
         ? { ...slot, status: "pending", invoice: slot.invoice }
-        : { ...slot, status: "failed", failure: slot.failure },
+        : slot.status === "deferred"
+          ? { ...slot, status: "queued" }
+          : { ...slot, status: "failed", failure: slot.failure },
     ),
   };
 }
@@ -199,6 +221,28 @@ export function prepareSlotRetry(
             status: "generating",
           }
         : slot,
+    ),
+  };
+}
+
+export function prepareQueuedSlot(
+  session: SettlementSession,
+  slotNumber: number,
+): SettlementSession {
+  if (
+    session.slots.some(
+      (slot) => slot.status === "pending" || slot.status === "generating",
+    )
+  ) {
+    throw new Error("현재 결제 요청을 먼저 완료하거나 만료를 기다리십시오.");
+  }
+  const target = session.slots.find((slot) => slot.slotNumber === slotNumber);
+  if (!target || target.status !== "queued")
+    throw new Error("대기 중인 결제 요청이 아닙니다.");
+  return {
+    ...session,
+    slots: session.slots.map((slot): ClientSlot =>
+      slot.slotNumber === slotNumber ? { ...slot, status: "generating" } : slot,
     ),
   };
 }
@@ -232,17 +276,16 @@ export function applySlotRetryResponse(
   ) {
     throw new Error("이전 결제 요청이 재사용되어 안전하게 거부했습니다.");
   }
+  const providerCommentStatus = session.overallNote
+    ? mergeProviderCommentStatus(
+        session.providerCommentStatus,
+        inferProviderCommentStatus(response),
+      )
+    : undefined;
   return {
     ...session,
     providerDomain: response.provider.domain,
-    ...(session.overallNote
-      ? {
-          providerCommentStatus:
-            response.provider.commentAllowed > 0
-              ? ("forwarded" as const)
-              : ("unsupported" as const),
-        }
-      : {}),
+    ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       excludedPaymentHashes,
@@ -252,7 +295,9 @@ export function applySlotRetryResponse(
       if (slot.slotNumber !== slotNumber) return slot;
       return result.status === "pending"
         ? { ...result, status: "pending", invoice: result.invoice }
-        : { ...result, status: "failed", failure: result.failure };
+        : result.status === "deferred"
+          ? { ...result, status: "queued" }
+          : { ...result, status: "failed", failure: result.failure };
     }),
   };
 }

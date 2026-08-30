@@ -13,6 +13,7 @@ import {
   createSettlementPreview,
   getSettlementProgress,
   manuallyConfirmSlot,
+  prepareQueuedSlot,
   prepareSlotRetry,
   type DraftInput,
 } from "./session";
@@ -82,8 +83,69 @@ describe("mobile settlement session", () => {
     ]);
   });
 
+  it("keeps disposable-provider slots queued until the active invoice finishes", () => {
+    const base: SettlementSession = {
+      version: 1,
+      id: "queued",
+      inputMode: "sats",
+      totalAmount: "3000",
+      totalPeople: 3,
+      excludePayer: false,
+      invoiceCount: 3,
+      lightningAddress: "user@wallet.example",
+      participantNameCandidates: [],
+      createdAt: "2030-01-01T00:00:00.000Z",
+      slots: [
+        {
+          slotNumber: 1,
+          targetSats: "1000",
+          attempt: 1,
+          status: "pending",
+          invoice: {
+            bolt11: "lnbc1first",
+            paymentHash: "11".repeat(32),
+            timestampSeconds: 1,
+            expirySeconds: 3600,
+            expiresAt: "2030-01-01T01:00:00.000Z",
+            payeeNodeId: `02${"11".repeat(32)}`,
+            featureBits: [],
+            providerDomain: "wallet.example",
+            disposable: true,
+          },
+        },
+        {
+          slotNumber: 2,
+          targetSats: "1000",
+          attempt: 1,
+          status: "queued",
+        },
+        {
+          slotNumber: 3,
+          targetSats: "1000",
+          attempt: 1,
+          status: "queued",
+        },
+      ],
+    };
+    expect(() => prepareQueuedSlot(base, 2)).toThrowError();
+    const ready = {
+      ...base,
+      slots: [
+        { ...base.slots[0]!, status: "manuallyConfirmed" as const },
+        base.slots[1]!,
+        base.slots[2]!,
+      ],
+    };
+    const prepared = prepareQueuedSlot(ready, 2);
+    expect(prepared.slots.map((slot) => slot.status)).toEqual([
+      "manuallyConfirmed",
+      "generating",
+      "queued",
+    ]);
+  });
+
   it.each([
-    [40, "forwarded"],
+    [40, undefined],
     [0, "unsupported"],
   ] as const)(
     "records provider comment delivery status for commentAllowed=%i",

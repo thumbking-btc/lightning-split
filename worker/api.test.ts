@@ -219,6 +219,7 @@ describe("Lightning Split Worker API", () => {
             fixtureId: `worker-partial-${callbackCount}`,
             timestamp: Math.floor(Date.now() / 1_000),
           }).invoice,
+          disposable: false,
         });
       }),
     );
@@ -264,6 +265,7 @@ describe("Lightning Split Worker API", () => {
             fixtureId: `worker-comment-${callbackCount}`,
             timestamp: Math.floor(Date.now() / 1_000),
           }).invoice,
+          disposable: false,
         });
       }),
     );
@@ -282,6 +284,48 @@ describe("Lightning Split Worker API", () => {
 
     expect(response.status).toBe(200);
     expect(comments).toEqual(["8/30 고깃집 저녁", "8/30 고깃집 저녁"]);
+  });
+
+  it("defers later invoices when callback reuse is not explicitly supported", async () => {
+    mockDiscovery();
+    let callbackCount = 0;
+    network.use(
+      http.get(CALLBACK_URL, ({ request }) => {
+        callbackCount += 1;
+        const amountSats =
+          BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: "worker-disposable-default",
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+        });
+      }),
+    );
+
+    const { response } = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [1, 2, 3].map((slotNumber) => ({
+          slotNumber,
+          targetSats: "1000",
+          attempt: 1,
+        })),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      completedCount: 1,
+      failedCount: 0,
+      slots: [
+        { status: "pending", slotNumber: 1 },
+        { status: "deferred", slotNumber: 2 },
+        { status: "deferred", slotNumber: 3 },
+      ],
+    });
+    expect(callbackCount).toBe(1);
   });
 
   it("creates invoices without a comment when the provider does not support it", async () => {
@@ -320,13 +364,22 @@ describe("Lightning Split Worker API", () => {
     });
   });
 
-  it("rejects a provider-specific overlong comment before callbacks", async () => {
+  it("keeps settlement working when a provider-specific comment limit is smaller", async () => {
     mockDiscovery(5);
     const callback = vi.fn();
     network.use(
-      http.get(CALLBACK_URL, () => {
+      http.get(CALLBACK_URL, ({ request }) => {
         callback();
-        return HttpResponse.json({ status: "ERROR", reason: "unexpected" });
+        const amountSats =
+          BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: "worker-overlong-provider-comment",
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+          disposable: false,
+        });
       }),
     );
 
@@ -338,11 +391,13 @@ describe("Lightning Split Worker API", () => {
       }),
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: "COMMENT_TOO_LONG" },
+      ok: true,
+      provider: { commentAllowed: 5, commentStatus: "unsupported" },
+      completedCount: 1,
     });
-    expect(callback).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledOnce();
   });
 
   it("keeps verify URLs sealed and settles without cache-local context", async () => {
@@ -483,8 +538,58 @@ describe("Lightning Split Worker API", () => {
     expect(settlementResponse.status).toBe(429);
   });
 
-  it("fails closed before provider access when the sealing secret is invalid", async () => {
+  it("does not require a sealing secret when the provider has no verify capability", async () => {
     const allow = { limit: () => Promise.resolve({ success: true }) };
+    mockDiscovery();
+    network.use(
+      http.get(CALLBACK_URL, ({ request }) => {
+        const amountSats =
+          BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: "worker-no-verify-secret",
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+        });
+      }),
+    );
+    const response = await handleApiRequest(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+      }),
+      {
+        INVOICE_RATE_LIMITER: allow,
+        SETTLEMENT_RATE_LIMITER: allow,
+        VERIFICATION_TOKEN_SECRET: "not-a-32-byte-key",
+      },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      provider: { automaticSettlementAvailable: false },
+      slots: [{ status: "pending" }],
+    });
+  });
+
+  it("fails closed when verify is offered but the sealing secret is invalid", async () => {
+    const allow = { limit: () => Promise.resolve({ success: true }) };
+    mockDiscovery();
+    network.use(
+      http.get(CALLBACK_URL, ({ request }) => {
+        const amountSats =
+          BigInt(new URL(request.url).searchParams.get("amount")!) / 1_000n;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: "worker-verify-invalid-secret",
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+          verify: "https://wallet.example/verify/one",
+        });
+      }),
+    );
     const response = await handleApiRequest(
       apiRequest("/api/invoices", {
         address: "user@wallet.example",

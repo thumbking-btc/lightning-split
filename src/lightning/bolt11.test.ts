@@ -55,4 +55,27 @@ describe("validateBolt11Invoice", () => {
       }),
     ).toThrowError();
   });
+
+  it("validates LNURL metadata hashes and ignores unsupported fallback versions", () => {
+    const fixture = createTestBolt11({
+      amountSats: 1_000n,
+      fixtureId: "metadata-hash",
+      descriptionHashSource: '[["text/plain","recipient"]]',
+      includeFallback: true,
+    });
+    expect(
+      validateBolt11Invoice(fixture.invoice, {
+        expectedSats: 1_000n,
+        expectedDescription: '[["text/plain","recipient"]]',
+        nowSeconds,
+      }).paymentHash,
+    ).toBe(fixture.paymentHash);
+    expect(() =>
+      validateBolt11Invoice(fixture.invoice, {
+        expectedSats: 1_000n,
+        expectedDescription: '[["text/plain","other"]]',
+        nowSeconds,
+      }),
+    ).toThrowError(Bolt11InvoiceError);
+  });
 });
