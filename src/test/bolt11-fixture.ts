@@ -47,6 +47,15 @@ function hex(bytes: Uint8Array): string {
     .join("");
 }
 
+function bytesFromHex(value: string): Uint8Array {
+  if (!/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error("Invalid test payment preimage.");
+  }
+  return Uint8Array.from(
+    value.match(/.{2}/gu)!.map((pair) => Number.parseInt(pair, 16)),
+  );
+}
+
 export function createTestBolt11(options: {
   readonly amountSats: bigint;
   readonly fixtureId: string;
@@ -55,11 +64,14 @@ export function createTestBolt11(options: {
   readonly description?: string;
   readonly descriptionHashSource?: string;
   readonly includeFallback?: boolean;
+  readonly paymentPreimage?: string;
 }): { readonly invoice: string; readonly paymentHash: string } {
   const timestamp = options.timestamp ?? 1_900_000_000;
   const expiry = options.expirySeconds ?? 3_600;
   const paymentHash = sha256(
-    new TextEncoder().encode(`hash:${options.fixtureId}`),
+    options.paymentPreimage === undefined
+      ? new TextEncoder().encode(`hash:${options.fixtureId}`)
+      : bytesFromHex(options.paymentPreimage),
   );
   const paymentSecret = sha256(
     new TextEncoder().encode(`secret:${options.fixtureId}`),

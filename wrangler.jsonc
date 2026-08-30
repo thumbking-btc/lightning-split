@@ -19,13 +19,17 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "NIP57_RECEIPTS",
-        "class_name": "Nip57ReceiptRelay",
+        "name": "INVOICE_BATCHES",
+        "class_name": "InvoiceBatchCoordinator",
       },
     ],
   },
   "exports": {
     "Nip57ReceiptRelay": {
+      "type": "durable-object",
+      "state": "deleted",
+    },
+    "InvoiceBatchCoordinator": {
       "type": "durable-object",
       "storage": "sqlite",
     },

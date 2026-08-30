@@ -1,47 +1,25 @@
 import { InfrastructureError } from "../src/infrastructure/errors";
 import { safeHttpsUrl } from "../src/infrastructure/url";
 import { isRecord } from "../src/infrastructure/validation";
-import { isValidNostrPublicKey } from "../src/nostr/event";
-import { parseAndValidateZapRequest } from "../src/nostr/zap";
 
-const TOKEN_PREFIX = "v1";
-const TOKEN_AAD = new TextEncoder().encode("lightning-split:verification:v1");
-const TOKEN_PATTERN = /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
+const TOKEN_PREFIX = "v2";
+const TOKEN_AAD = new TextEncoder().encode("lightning-split:verification:v2");
+const TOKEN_PATTERN = /^v2\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 const HASH_PATTERN = /^[0-9a-f]{64}$/u;
-const CHANNEL_PATTERN = /^[0-9a-f]{64}$/u;
 const SECRET_PATTERN = /^[0-9a-f]{64}$/u;
 const MAX_TOKEN_LIFETIME_MS = 31 * 24 * 60 * 60 * 1_000;
 
 export interface VerificationContext {
-  readonly verifyUrl?: string;
-  readonly nip57?: {
-    readonly relayChannel: string;
-    readonly providerPubkey: string;
-    readonly requestJson: string;
-  };
+  readonly verifyUrl: string;
   readonly expectedPaymentHash: string;
   readonly expectedInvoiceHash: string;
   readonly issuedAtMs: number;
   readonly expiresAtMs: number;
 }
 
-interface SealedPayloadV1 {
+interface SealedPayload {
   readonly v: 1;
   readonly u: string;
-  readonly p: string;
-  readonly i: string;
-  readonly a: number;
-  readonly e: number;
-}
-
-interface SealedPayloadV2 {
-  readonly v: 2;
-  readonly u?: string;
-  readonly n?: {
-    readonly c: string;
-    readonly k: string;
-    readonly r: string;
-  };
   readonly p: string;
   readonly i: string;
   readonly a: number;
@@ -136,44 +114,11 @@ function parseCommonPayload(
 function parsePayload(value: unknown, nowMs: number): VerificationContext {
   if (!isRecord(value)) throw new Error("invalid payload");
   const common = parseCommonPayload(value, nowMs);
-  if (value.v === 1 && typeof value.u === "string") {
-    return Object.freeze({
-      ...common,
-      verifyUrl: safeHttpsUrl(value.u).toString(),
-    });
-  }
-  if (value.v !== 2) throw new Error("invalid payload");
-  const verifyUrl =
-    typeof value.u === "string" ? safeHttpsUrl(value.u).toString() : undefined;
-  let nip57: VerificationContext["nip57"];
-  if (isRecord(value.n)) {
-    if (
-      typeof value.n.c !== "string" ||
-      !CHANNEL_PATTERN.test(value.n.c) ||
-      typeof value.n.k !== "string" ||
-      !isValidNostrPublicKey(value.n.k) ||
-      typeof value.n.r !== "string" ||
-      value.n.r.length < 1 ||
-      value.n.r.length > 2_500
-    ) {
-      throw new Error("invalid payload");
-    }
-    parseAndValidateZapRequest(value.n.r, {
-      expectedProviderPubkey: value.n.k,
-    });
-    nip57 = Object.freeze({
-      relayChannel: value.n.c,
-      providerPubkey: value.n.k,
-      requestJson: value.n.r,
-    });
-  }
-  if (verifyUrl === undefined && nip57 === undefined) {
+  if (value.v !== 1 || typeof value.u !== "string")
     throw new Error("invalid payload");
-  }
   return Object.freeze({
     ...common,
-    ...(verifyUrl === undefined ? {} : { verifyUrl }),
-    ...(nip57 === undefined ? {} : { nip57 }),
+    verifyUrl: safeHttpsUrl(value.u).toString(),
   });
 }
 
@@ -187,12 +132,7 @@ function invalidToken(cause?: unknown): InfrastructureError {
 
 export async function sealVerificationContext(
   input: {
-    readonly verifyUrl?: string;
-    readonly nip57?: {
-      readonly relayChannel: string;
-      readonly providerPubkey: string;
-      readonly requestJson: string;
-    };
+    readonly verifyUrl: string;
     readonly expectedPaymentHash: string;
     readonly expectedInvoice: string;
     readonly expiresAt: string;
@@ -205,8 +145,7 @@ export async function sealVerificationContext(
     !HASH_PATTERN.test(input.expectedPaymentHash) ||
     !Number.isSafeInteger(expiresAtMs) ||
     expiresAtMs <= nowMs ||
-    expiresAtMs - nowMs > MAX_TOKEN_LIFETIME_MS ||
-    (input.verifyUrl === undefined && input.nip57 === undefined)
+    expiresAtMs - nowMs > MAX_TOKEN_LIFETIME_MS
   ) {
     throw invalidToken();
   }
@@ -216,39 +155,11 @@ export async function sealVerificationContext(
     a: nowMs,
     e: expiresAtMs,
   } as const;
-  let payload: SealedPayloadV1 | SealedPayloadV2;
-  if (input.nip57 === undefined) {
-    if (input.verifyUrl === undefined) throw invalidToken();
-    payload = {
-      v: 1,
-      u: safeHttpsUrl(input.verifyUrl).toString(),
-      ...common,
-    };
-  } else {
-    if (
-      !CHANNEL_PATTERN.test(input.nip57.relayChannel) ||
-      !isValidNostrPublicKey(input.nip57.providerPubkey) ||
-      input.nip57.requestJson.length < 1 ||
-      input.nip57.requestJson.length > 2_500
-    ) {
-      throw invalidToken();
-    }
-    parseAndValidateZapRequest(input.nip57.requestJson, {
-      expectedProviderPubkey: input.nip57.providerPubkey,
-    });
-    payload = {
-      v: 2,
-      ...(input.verifyUrl === undefined
-        ? {}
-        : { u: safeHttpsUrl(input.verifyUrl).toString() }),
-      n: {
-        c: input.nip57.relayChannel,
-        k: input.nip57.providerPubkey,
-        r: input.nip57.requestJson,
-      },
-      ...common,
-    };
-  }
+  const payload: SealedPayload = {
+    v: 1,
+    u: safeHttpsUrl(input.verifyUrl).toString(),
+    ...common,
+  };
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: TOKEN_AAD, tagLength: 128 },

@@ -4,9 +4,6 @@ import type { Fetcher } from "../infrastructure/http";
 import { createTestBolt11 } from "../test/bolt11-fixture";
 import { LnurlPayClient, normalizeLightningAddress } from "./lnurl";
 
-const VALID_NOSTR_PUBKEY =
-  "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-
 function jsonFetcher(handler: (url: URL) => unknown): Fetcher {
   return vi.fn((input) =>
     Promise.resolve(
@@ -32,7 +29,7 @@ describe("Lightning Address and LNURL-pay", () => {
     ).toThrowError();
   });
 
-  it("parses metadata, payerData, comments and provider capabilities", async () => {
+  it("parses metadata, payerData and comments while ignoring NIP-57 provider fields", async () => {
     const client = new LnurlPayClient(
       jsonFetcher(() => ({
         tag: "payRequest",
@@ -43,41 +40,19 @@ describe("Lightning Address and LNURL-pay", () => {
         payerData: { name: { mandatory: false } },
         commentAllowed: 40,
         allowsNostr: true,
-        nostrPubkey: VALID_NOSTR_PUBKEY,
+        nostrPubkey:
+          "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
       })),
-    );
-    await expect(client.discover("user@wallet.example")).resolves.toMatchObject(
-      {
-        minSendableMsat: 1_000n,
-        maxSendableMsat: 10_000_000n,
-        commentAllowed: 40,
-        allowsNostr: true,
-        nostrPubkey: VALID_NOSTR_PUBKEY,
-        mandatoryPayerData: [],
-      },
-    );
-  });
-
-  it("disables advertised NIP-57 when nostrPubkey is not a BIP-340 x-coordinate", async () => {
-    const client = new LnurlPayClient(
-      jsonFetcher(() => ({
-        tag: "payRequest",
-        callback: "https://wallet.example/callback",
-        minSendable: 1_000,
-        maxSendable: 10_000_000,
-        metadata: '[["text/plain","test user"]]',
-        allowsNostr: true,
-        nostrPubkey: "ff".repeat(32),
-      })),
-    );
-
-    await expect(client.discover("user@wallet.example")).resolves.toMatchObject(
-      {
-        allowsNostr: false,
-      },
     );
     const discovery = await client.discover("user@wallet.example");
-    expect(discovery.nostrPubkey).toBeUndefined();
+    expect(discovery).toMatchObject({
+      minSendableMsat: 1_000n,
+      maxSendableMsat: 10_000_000n,
+      commentAllowed: 40,
+      mandatoryPayerData: [],
+    });
+    expect(discovery).not.toHaveProperty("allowsNostr");
+    expect(discovery).not.toHaveProperty("nostrPubkey");
   });
 
   it("accepts a LUD-06 discovery document containing a maximum-size image metadata entry", async () => {
@@ -175,13 +150,8 @@ describe("Lightning Address and LNURL-pay", () => {
     ).resolves.toMatchObject({ invoice: longInvoice });
   });
 
-  it("preserves exact NIP-57, LNURL and comment values in the callback query", async () => {
+  it("preserves the callback query and comment while parsing LUD-21 verify", async () => {
     const calls: URL[] = [];
-    const requestJson = JSON.stringify({
-      id: "signed-event",
-      content: "8/30 고깃집 저녁 & 회비",
-    });
-    const lnurl = "lnurl1dp68gurn8ghj7example";
     const fetcher = jsonFetcher((url) => {
       calls.push(url);
       if (url.pathname.includes("well-known")) {
@@ -193,7 +163,8 @@ describe("Lightning Address and LNURL-pay", () => {
           metadata: '[["text/plain","test"]]',
           commentAllowed: 40,
           allowsNostr: true,
-          nostrPubkey: VALID_NOSTR_PUBKEY,
+          nostrPubkey:
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
         };
       }
       return { pr: "lnbc-test", verify: "https://wallet.example/verify/one" };
@@ -202,13 +173,12 @@ describe("Lightning Address and LNURL-pay", () => {
     const discovery = await client.discover("user@wallet.example");
     const invoice = await client.requestInvoice(discovery, 1_000n, {
       comment: "8/30 고깃집 저녁",
-      nostr: { requestJson, lnurl },
     });
     expect(calls[1]?.searchParams.get("opaque")).toBe("abc");
     expect(calls[1]?.searchParams.get("amount")).toBe("1000000");
     expect(calls[1]?.searchParams.get("comment")).toBe("8/30 고깃집 저녁");
-    expect(calls[1]?.searchParams.get("nostr")).toBe(requestJson);
-    expect(calls[1]?.searchParams.get("lnurl")).toBe(lnurl);
+    expect(calls[1]?.searchParams.has("nostr")).toBe(false);
+    expect(calls[1]?.searchParams.has("lnurl")).toBe(false);
     expect(calls[1]?.toString()).not.toContain("고깃집");
     expect(invoice.verifyUrl).toBe("https://wallet.example/verify/one");
     expect(invoice.commentSent).toBe(true);
@@ -380,7 +350,8 @@ describe("Lightning Address and LNURL-pay", () => {
             },
             commentAllowed: "not-an-integer",
             allowsNostr: true,
-            nostrPubkey: "bad",
+            nostrPubkey:
+              "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
           }
         : {
             pr: "lnbc-test",
@@ -392,9 +363,10 @@ describe("Lightning Address and LNURL-pay", () => {
     const discovery = await client.discover("user@wallet.example");
     expect(discovery).toMatchObject({
       commentAllowed: 0,
-      allowsNostr: false,
       payerData: { name: { mandatory: false } },
     });
+    expect(discovery).not.toHaveProperty("allowsNostr");
+    expect(discovery).not.toHaveProperty("nostrPubkey");
     expect(discovery.metadataEntries[1]?.[1]).toEqual({ future: true });
     await expect(client.requestInvoice(discovery, 1n)).resolves.toEqual({
       invoice: "lnbc-test",

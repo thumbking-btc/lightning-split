@@ -1,19 +1,52 @@
 import { openDB } from "idb";
 
 import { parsePriceSnapshotDto } from "../api/serialization";
-import { createKrwSplitPlan, createSatsSplitPlan } from "../domain/money";
+import {
+  createKrwSplitPlan,
+  createSatsSplitPlan,
+  MAX_PEOPLE,
+} from "../domain/money";
 import { isRecord } from "../infrastructure/validation";
 import { MAX_INVOICE_HISTORY, type SettlementSession } from "./types";
 
 const DATABASE_NAME = "lightning-split";
 const STORE_NAME = "settlements";
-const ACTIVE_SESSION_KEY = "active";
-const LEGACY_UUID_VERIFICATION_TOKEN =
-  /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
+const ACTIVE_SESSION_KEY = "active-v2";
+const LEGACY_ACTIVE_SESSION_KEY = "active";
+const QUARANTINED_SESSION_KEY = "quarantine-v2";
+const REVISION_KEY = "revision-v2";
+const CURRENT_VERIFICATION_TOKEN =
+  /^v2\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 
 let databasePromise: ReturnType<typeof openDB> | undefined;
 let databaseOperationTail: Promise<void> = Promise.resolve();
 let persistenceEpoch = 0;
+let knownRevision: number | undefined;
+
+export class SessionPersistenceConflictError extends Error {
+  constructor() {
+    super("다른 탭에서 정산 기록이 변경되었습니다.");
+    this.name = "SessionPersistenceConflictError";
+  }
+}
+
+function parseStoredRevision(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function storedSessionId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) && typeof parsed.id === "string"
+      ? parsed.id
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function isCanonicalPositiveDecimal(value: unknown): value is string {
   return typeof value === "string" && /^[1-9]\d*$/u.test(value);
@@ -45,16 +78,7 @@ function isStoredInvoice(value: unknown): boolean {
     (value.disposable === undefined || typeof value.disposable === "boolean") &&
     (value.verificationToken === undefined ||
       (typeof value.verificationToken === "string" &&
-        /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u.test(
-          value.verificationToken,
-        ))) &&
-    (value.paymentRequest === undefined ||
-      (typeof value.paymentRequest === "string" &&
-        value.paymentRequest.length >= 1 &&
-        value.paymentRequest.length <= 2_300 &&
-        (value.paymentRequest === value.bolt11 ||
-          value.paymentRequest.startsWith("lnurl1") ||
-          value.paymentRequest.startsWith("bitcoin:?lightning=")))) &&
+        CURRENT_VERIFICATION_TOKEN.test(value.verificationToken))) &&
     (value.awaitingPersistence === undefined ||
       value.awaitingPersistence === true)
   );
@@ -67,6 +91,27 @@ function isStoredAnnotation(value: unknown): boolean {
       typeof value.displayName === "string") &&
     (value.note === undefined || typeof value.note === "string") &&
     isIsoTimestamp(value.updatedAt)
+  );
+}
+
+function isStoredSettlementEvidence(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.kind === "lud21" &&
+    isIsoTimestamp(value.checkedAt) &&
+    value.preimagePresent === true &&
+    (value.providerStatus === undefined ||
+      value.providerStatus === null ||
+      (typeof value.providerStatus === "string" &&
+        value.providerStatus.length <= 128))
+  );
+}
+
+function isStoredLegacySettlement(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.source === "legacyUnknown" &&
+    isIsoTimestamp(value.observedAt)
   );
 }
 
@@ -99,15 +144,31 @@ function isStoredSlot(value: unknown): boolean {
   ) {
     return false;
   }
-  if (value.status === "generating" || value.status === "queued")
-    return value.invoice === undefined;
+  if (value.status === "generating") {
+    return (
+      value.invoice === undefined &&
+      value.failure === undefined &&
+      value.settledAt === undefined &&
+      value.confirmedAt === undefined &&
+      value.verificationDelayed === undefined &&
+      value.settlementEvidence === undefined &&
+      value.legacySettlement === undefined &&
+      value.annotation === undefined
+    );
+  }
   if (value.status === "failed") {
     return (
       isRecord(value.failure) &&
       typeof value.failure.code === "string" &&
       typeof value.failure.message === "string" &&
       typeof value.failure.retryable === "boolean" &&
-      (value.invoice === undefined || isStoredInvoice(value.invoice))
+      (value.invoice === undefined || isStoredInvoice(value.invoice)) &&
+      value.settledAt === undefined &&
+      value.confirmedAt === undefined &&
+      value.verificationDelayed === undefined &&
+      value.settlementEvidence === undefined &&
+      value.legacySettlement === undefined &&
+      value.annotation === undefined
     );
   }
   if (
@@ -115,11 +176,13 @@ function isStoredSlot(value: unknown): boolean {
     value.status !== "verifyingExpired" &&
     value.status !== "settled" &&
     value.status !== "expired" &&
-    value.status !== "manuallyConfirmed"
+    value.status !== "manuallyConfirmed" &&
+    value.status !== "legacyReviewRequired"
   ) {
     return false;
   }
   if (!isStoredInvoice(value.invoice)) return false;
+  if (value.failure !== undefined) return false;
   if (
     value.status === "verifyingExpired" &&
     (!isRecord(value.invoice) ||
@@ -127,7 +190,11 @@ function isStoredSlot(value: unknown): boolean {
   ) {
     return false;
   }
-  if (value.status === "settled" && !isIsoTimestamp(value.settledAt)) {
+  if (
+    value.status === "settled" &&
+    (!isIsoTimestamp(value.settledAt) ||
+      !isStoredSettlementEvidence(value.settlementEvidence))
+  ) {
     return false;
   }
   if (
@@ -136,39 +203,118 @@ function isStoredSlot(value: unknown): boolean {
   ) {
     return false;
   }
-  return value.annotation === undefined || isStoredAnnotation(value.annotation);
+  if (
+    value.status === "legacyReviewRequired" &&
+    !isStoredLegacySettlement(value.legacySettlement)
+  ) {
+    return false;
+  }
+  if (
+    (value.status === "pending" ||
+      value.status === "verifyingExpired" ||
+      value.status === "expired") &&
+    (value.settledAt !== undefined ||
+      value.confirmedAt !== undefined ||
+      value.settlementEvidence !== undefined ||
+      value.legacySettlement !== undefined ||
+      value.annotation !== undefined)
+  ) {
+    return false;
+  }
+  if (
+    value.status === "settled" &&
+    (value.confirmedAt !== undefined ||
+      value.legacySettlement !== undefined ||
+      value.verificationDelayed !== undefined)
+  ) {
+    return false;
+  }
+  if (
+    value.status === "manuallyConfirmed" &&
+    (value.settledAt !== undefined ||
+      value.settlementEvidence !== undefined ||
+      value.legacySettlement !== undefined ||
+      value.verificationDelayed !== undefined)
+  ) {
+    return false;
+  }
+  if (
+    value.status === "legacyReviewRequired" &&
+    (value.settledAt !== undefined ||
+      value.confirmedAt !== undefined ||
+      value.settlementEvidence !== undefined ||
+      value.verificationDelayed !== undefined)
+  ) {
+    return false;
+  }
+  return (
+    (value.annotation === undefined || isStoredAnnotation(value.annotation)) &&
+    (value.settlementEvidence === undefined ||
+      (value.status === "settled" &&
+        isStoredSettlementEvidence(value.settlementEvidence))) &&
+    (value.legacySettlement === undefined ||
+      (value.status === "legacyReviewRequired" &&
+        isStoredLegacySettlement(value.legacySettlement)))
+  );
 }
 
 function isStoredHistoricalInvoiceAttempt(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.slotNumber) ||
+    Number(value.slotNumber) < 1 ||
+    !isCanonicalPositiveDecimal(value.targetSats) ||
+    (value.krwShare !== undefined &&
+      !isCanonicalPositiveDecimal(value.krwShare)) ||
+    !Number.isSafeInteger(value.attempt) ||
+    Number(value.attempt) < 1 ||
+    !isStoredInvoice(value.invoice) ||
+    !isIsoTimestamp(value.retiredAt)
+  ) {
+    return false;
+  }
+  const hasNoCompletionEvidence =
+    value.settledAt === undefined &&
+    value.confirmedAt === undefined &&
+    value.settlementEvidence === undefined &&
+    value.legacySettlement === undefined;
+  const hasNetworkEvidence =
+    isIsoTimestamp(value.settledAt) &&
+    value.confirmedAt === undefined &&
+    isStoredSettlementEvidence(value.settlementEvidence) &&
+    value.legacySettlement === undefined;
+  const hasManualEvidence =
+    value.settledAt === undefined &&
+    isIsoTimestamp(value.confirmedAt) &&
+    value.settlementEvidence === undefined &&
+    value.legacySettlement === undefined;
+  const hasLegacyEvidence =
+    value.settledAt === undefined &&
+    value.confirmedAt === undefined &&
+    value.settlementEvidence === undefined &&
+    isStoredLegacySettlement(value.legacySettlement);
   return (
-    isRecord(value) &&
-    Number.isSafeInteger(value.slotNumber) &&
-    Number(value.slotNumber) >= 1 &&
-    isCanonicalPositiveDecimal(value.targetSats) &&
-    (value.krwShare === undefined ||
-      isCanonicalPositiveDecimal(value.krwShare)) &&
-    Number.isSafeInteger(value.attempt) &&
-    Number(value.attempt) >= 1 &&
-    isStoredInvoice(value.invoice) &&
-    isIsoTimestamp(value.retiredAt) &&
-    (value.settledAt === undefined || isIsoTimestamp(value.settledAt))
+    hasNoCompletionEvidence ||
+    hasNetworkEvidence ||
+    hasManualEvidence ||
+    hasLegacyEvidence
   );
 }
 
 function isSettlementSession(value: unknown): value is SettlementSession {
   return (
     isRecord(value) &&
-    value.version === 1 &&
+    value.version === 2 &&
     typeof value.id === "string" &&
     (value.inputMode === "krw" || value.inputMode === "sats") &&
     isCanonicalPositiveDecimal(value.totalAmount) &&
     Number.isSafeInteger(value.totalPeople) &&
     Number(value.totalPeople) >= 2 &&
-    Number(value.totalPeople) <= 10 &&
+    Number(value.totalPeople) <= MAX_PEOPLE &&
     typeof value.excludePayer === "boolean" &&
     Number.isSafeInteger(value.invoiceCount) &&
     Number(value.invoiceCount) >= 1 &&
-    Number(value.invoiceCount) <= 10 &&
+    Number(value.invoiceCount) <= MAX_PEOPLE &&
     typeof value.lightningAddress === "string" &&
     isIsoTimestamp(value.createdAt) &&
     (value.overallNote === undefined ||
@@ -181,10 +327,6 @@ function isSettlementSession(value: unknown): value is SettlementSession {
       value.providerCommentStatus === "forwarded" ||
       value.providerCommentStatus === "unsupported" ||
       value.providerCommentStatus === "partial") &&
-    (value.paymentDescriptionStatus === undefined ||
-      value.paymentDescriptionStatus === "embedded" ||
-      value.paymentDescriptionStatus === "notEmbedded" ||
-      value.paymentDescriptionStatus === "partial") &&
     (value.providerDomain === undefined ||
       typeof value.providerDomain === "string") &&
     isStoredPaymentHashList(value.issuedPaymentHashes) &&
@@ -318,32 +460,114 @@ function serializeStoredSession(session: SettlementSession): string {
   });
 }
 
-function migrateLegacyVerificationTokens(value: unknown): unknown {
+function migrateInvoice(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const {
+    paymentRequest: _legacyPaymentRequest,
+    verificationToken,
+    ...invoice
+  } = value;
+  void _legacyPaymentRequest;
+  return typeof verificationToken === "string" &&
+    CURRENT_VERIFICATION_TOKEN.test(verificationToken)
+    ? { ...invoice, verificationToken }
+    : invoice;
+}
+
+function migrateLegacySession(value: unknown): unknown {
   if (!isRecord(value) || !Array.isArray(value.slots)) return value;
-
-  let changed = false;
+  const isLegacyV1 = value.version === 1;
+  const { paymentDescriptionStatus: _legacyDescriptionStatus, ...session } =
+    value;
+  void _legacyDescriptionStatus;
   const slots = value.slots.map((slot) => {
-    if (!isRecord(slot) || !isRecord(slot.invoice)) return slot;
-    const verificationToken = slot.invoice.verificationToken;
-    if (
-      typeof verificationToken !== "string" ||
-      !LEGACY_UUID_VERIFICATION_TOKEN.test(verificationToken)
-    ) {
-      return slot;
+    if (!isRecord(slot)) return slot;
+    const migratedInvoice =
+      slot.invoice === undefined ? undefined : migrateInvoice(slot.invoice);
+    if (isLegacyV1 && slot.status === "queued") {
+      return {
+        slotNumber: slot.slotNumber,
+        targetSats: slot.targetSats,
+        ...(slot.krwShare === undefined ? {} : { krwShare: slot.krwShare }),
+        attempt: slot.attempt,
+        status: "failed",
+        failure: {
+          code: "LEGACY_QUEUE_REMOVED",
+          message: "중단된 결제 요청을 다시 만들 수 있습니다.",
+          retryable: true,
+        },
+      };
     }
-
-    changed = true;
-    const { verificationToken: _legacyToken, ...invoice } = slot.invoice;
-    void _legacyToken;
-    return { ...slot, invoice };
+    const migratedSlot =
+      migratedInvoice === undefined
+        ? slot
+        : { ...slot, invoice: migratedInvoice };
+    if (
+      isLegacyV1 &&
+      migratedSlot.status === "settled" &&
+      !isStoredSettlementEvidence(migratedSlot.settlementEvidence)
+    ) {
+      const {
+        settledAt,
+        settlementEvidence: _legacyEvidence,
+        verificationDelayed: _legacyVerificationDelay,
+        ...remaining
+      } = migratedSlot;
+      void _legacyEvidence;
+      void _legacyVerificationDelay;
+      return {
+        ...remaining,
+        status: "legacyReviewRequired",
+        legacySettlement: {
+          source: "legacyUnknown",
+          observedAt: isIsoTimestamp(settledAt) ? settledAt : value.createdAt,
+        },
+      };
+    }
+    return migratedSlot;
   });
-
-  return changed ? { ...value, slots } : value;
+  const invoiceHistory = Array.isArray(value.invoiceHistory)
+    ? value.invoiceHistory.map((attempt) => {
+        if (!isRecord(attempt)) return attempt;
+        const migratedAttempt =
+          attempt.invoice === undefined
+            ? attempt
+            : { ...attempt, invoice: migrateInvoice(attempt.invoice) };
+        if (
+          isLegacyV1 &&
+          migratedAttempt.settledAt !== undefined &&
+          !isStoredSettlementEvidence(migratedAttempt.settlementEvidence)
+        ) {
+          const {
+            settledAt: _legacySettledAt,
+            settlementEvidence: _legacyEvidence,
+            ...remaining
+          } = migratedAttempt;
+          void _legacyEvidence;
+          return {
+            ...remaining,
+            legacySettlement: {
+              source: "legacyUnknown",
+              observedAt: isIsoTimestamp(_legacySettledAt)
+                ? _legacySettledAt
+                : value.createdAt,
+            },
+          };
+        }
+        return migratedAttempt;
+      })
+    : value.invoiceHistory;
+  return {
+    ...session,
+    ...(isLegacyV1 ? { version: 2 } : {}),
+    slots,
+    ...(invoiceHistory === undefined ? {} : { invoiceHistory }),
+  };
 }
 
 export function restoreSession(serialized: string): SettlementSession {
   const parsed: unknown = JSON.parse(serialized);
-  return assertSession(migrateLegacyVerificationTokens(parsed));
+  return assertSession(migrateLegacySession(parsed));
 }
 
 export function recoverInterruptedSession(
@@ -410,46 +634,125 @@ function serializeDatabaseOperation<T>(
 }
 
 export function saveActiveSession(session: SettlementSession): Promise<void> {
-  // Schema v1 must remain readable by the previous production PWA. The new
-  // client derives the short final-verification state from invoice expiry.
-  const serialized = serializeStoredSession(session);
+  // The short final-verification state is derived from invoice expiry after
+  // reload, so it is persisted as the stable pending state.
   const operationEpoch = persistenceEpoch;
   return serializeDatabaseOperation(async () => {
+    assertSession(session);
+    const serialized = serializeStoredSession(session);
     if (operationEpoch !== persistenceEpoch) return;
     const database = await openSettlementDatabase();
     if (operationEpoch !== persistenceEpoch) return;
-    await database.put(STORE_NAME, serialized, ACTIVE_SESSION_KEY);
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    const storedRevision = parseStoredRevision(
+      await transaction.store.get(REVISION_KEY),
+    );
+    const storedSession = await transaction.store.get(ACTIVE_SESSION_KEY);
+    if (knownRevision === undefined) knownRevision = storedRevision;
+    if (storedRevision !== knownRevision) {
+      if (storedSession === serialized) {
+        knownRevision = storedRevision;
+        await transaction.done;
+        return;
+      }
+      transaction.abort();
+      await transaction.done.catch(() => undefined);
+      throw new SessionPersistenceConflictError();
+    }
+    if (storedSession === serialized) {
+      await transaction.done;
+      return;
+    }
+    const nextRevision = storedRevision + 1;
+    await transaction.store.put(serialized, ACTIVE_SESSION_KEY);
+    await transaction.store.put(nextRevision, REVISION_KEY);
+    await transaction.done;
+    knownRevision = nextRevision;
   });
 }
 
 export function loadActiveSession(): Promise<SettlementSession | null> {
   return serializeDatabaseOperation(async () => {
     const database = await openSettlementDatabase();
-    const stored: unknown = await database.get(STORE_NAME, ACTIVE_SESSION_KEY);
-    if (typeof stored !== "string") return null;
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    let revision = parseStoredRevision(
+      await transaction.store.get(REVISION_KEY),
+    );
+    let sourceKey = ACTIVE_SESSION_KEY;
+    let stored: unknown = await transaction.store.get(ACTIVE_SESSION_KEY);
+    if (typeof stored !== "string") {
+      sourceKey = LEGACY_ACTIVE_SESSION_KEY;
+      stored = await transaction.store.get(LEGACY_ACTIVE_SESSION_KEY);
+    }
+    if (typeof stored !== "string") {
+      await transaction.done;
+      knownRevision = revision;
+      return null;
+    }
     let restored: SettlementSession;
     try {
       restored = restoreSession(stored);
     } catch {
+      try {
+        await transaction.store.put(stored, QUARANTINED_SESSION_KEY);
+        await transaction.store.delete(sourceKey);
+        revision += 1;
+        await transaction.store.put(revision, REVISION_KEY);
+        await transaction.done;
+        knownRevision = revision;
+      } catch {
+        transaction.abort();
+        await transaction.done.catch(() => undefined);
+      }
       return null;
     }
 
     const migrated = serializeStoredSession(restored);
-    if (migrated !== stored) {
-      try {
-        await database.put(STORE_NAME, migrated, ACTIVE_SESSION_KEY);
-      } catch {
-        // Keep the valid in-memory recovery even when migration persistence fails.
+    if (sourceKey !== ACTIVE_SESSION_KEY || migrated !== stored) {
+      await transaction.store.put(migrated, ACTIVE_SESSION_KEY);
+      if (sourceKey !== ACTIVE_SESSION_KEY) {
+        await transaction.store.delete(sourceKey);
       }
+      revision += 1;
+      await transaction.store.put(revision, REVISION_KEY);
     }
+    await transaction.done;
+    knownRevision = revision;
     return restored;
   });
 }
 
-export function clearActiveSession(): Promise<void> {
+export function clearActiveSession(expectedSessionId?: string): Promise<void> {
   persistenceEpoch += 1;
   return serializeDatabaseOperation(async () => {
     const database = await openSettlementDatabase();
-    await database.delete(STORE_NAME, ACTIVE_SESSION_KEY);
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    const storedRevision = parseStoredRevision(
+      await transaction.store.get(REVISION_KEY),
+    );
+    const storedActive = await transaction.store.get(ACTIVE_SESSION_KEY);
+    const storedLegacy = await transaction.store.get(LEGACY_ACTIVE_SESSION_KEY);
+    if (
+      expectedSessionId !== undefined &&
+      (knownRevision === undefined ||
+        storedRevision !== knownRevision ||
+        ([storedActive, storedLegacy].some(
+          (value) => typeof value === "string",
+        ) &&
+          ![storedActive, storedLegacy].some(
+            (value) => storedSessionId(value) === expectedSessionId,
+          )))
+    ) {
+      transaction.abort();
+      await transaction.done.catch(() => undefined);
+      throw new SessionPersistenceConflictError();
+    }
+    await transaction.store.delete(ACTIVE_SESSION_KEY);
+    await transaction.store.delete(LEGACY_ACTIVE_SESSION_KEY);
+    await transaction.store.delete(QUARANTINED_SESSION_KEY);
+    const nextRevision = storedRevision + 1;
+    await transaction.store.put(nextRevision, REVISION_KEY);
+    await transaction.done;
+    knownRevision = nextRevision;
   });
 }

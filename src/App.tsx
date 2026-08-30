@@ -14,6 +14,7 @@ import {
   loadActiveSession,
   recoverInterruptedSession,
   saveActiveSession,
+  SessionPersistenceConflictError,
 } from "./app/persistence";
 import { QrCode } from "./app/QrCode";
 import {
@@ -37,7 +38,6 @@ import {
   markExpiredSlots,
   nextActionableSlotIndex,
   pendingInvoicePersistenceIdentities,
-  prepareQueuedSlot,
   prepareSlotRetry,
   type DraftInput,
   type SettlementPreview,
@@ -51,6 +51,7 @@ import { toUserMessage } from "./app/userMessage";
 import { useSettlementPolling } from "./app/useSettlementPolling";
 import { DEFAULT_LIGHTNING_POLICY } from "./config/policies";
 import type { InputMode } from "./domain/models";
+import { MAX_PEOPLE, MIN_PEOPLE } from "./domain/money";
 import "./styles.css";
 
 const integerFormatter = new Intl.NumberFormat("ko-KR");
@@ -115,20 +116,22 @@ function formatRemainingTime(expiresAt: string, nowMs: number): string {
 function slotStatus(slot: ClientSlot): { label: string; tone: string } {
   if (slot.status === "generating")
     return { label: "결제 요청 생성 중", tone: "working" };
-  if (slot.status === "queued")
-    return { label: "앞 결제 완료 후 생성", tone: "muted" };
   if (slot.status === "verifyingExpired")
     return { label: "최종 결제 확인 중", tone: "working" };
-  if (slot.status === "settled") return { label: "결제 완료", tone: "done" };
+  if (slot.status === "settled")
+    return {
+      label: slot.settlementEvidence ? "자동 확인 완료" : "이전 확인 기록",
+      tone: slot.settlementEvidence ? "done" : "manual",
+    };
   if (slot.status === "manuallyConfirmed")
     return { label: "사용자 확인", tone: "manual" };
+  if (slot.status === "legacyReviewRequired")
+    return { label: "이전 기록 확인 필요", tone: "manual" };
   if (slot.status === "expired") return { label: "만료", tone: "muted" };
   if (slot.status === "failed") return { label: "생성 실패", tone: "error" };
   if (slot.invoice?.awaitingPersistence === true)
     return { label: "결제 요청 저장 중", tone: "working" };
-  return slot.invoice?.verificationToken
-    ? { label: "결제 대기 · 자동 확인 중", tone: "waiting" }
-    : { label: "결제 대기 · 사용자 확인 필요", tone: "waiting" };
+  return { label: "결제 대기", tone: "waiting" };
 }
 
 function ExpiryCountdown({ expiresAt }: { readonly expiresAt: string }) {
@@ -149,6 +152,7 @@ export function InvoiceCard({
   slot,
   candidates,
   retrying,
+  renderQr = true,
   onAnnotate,
   onRetry,
   onManualConfirm,
@@ -156,26 +160,19 @@ export function InvoiceCard({
   readonly slot: ClientSlot;
   readonly candidates: readonly string[];
   readonly retrying: boolean;
+  readonly renderQr?: boolean;
   readonly onAnnotate: (slotNumber: number, displayName: string) => void;
   readonly onRetry: (slotNumber: number) => void;
   readonly onManualConfirm: (slotNumber: number) => void;
 }) {
   const status = slotStatus(slot);
   const [copyFeedback, setCopyFeedback] = useState<string>();
-  const [showRichPaymentRequest, setShowRichPaymentRequest] = useState(false);
   const completed =
     slot.status === "settled" || slot.status === "manuallyConfirmed";
-  const hasRichPaymentRequest =
-    slot.invoice?.paymentRequest !== undefined &&
-    slot.invoice.paymentRequest !== slot.invoice.bolt11;
-  const displayedPaymentRequest =
-    slot.invoice && hasRichPaymentRequest && showRichPaymentRequest
-      ? slot.invoice.paymentRequest
-      : slot.invoice?.bolt11;
 
   const copyInvoice = async () => {
-    if (!displayedPaymentRequest) return;
-    const copied = await copyTextToClipboard(displayedPaymentRequest);
+    if (!slot.invoice) return;
+    const copied = await copyTextToClipboard(slot.invoice.bolt11);
     setCopyFeedback(
       copied
         ? "결제 요청을 복사했습니다."
@@ -216,13 +213,11 @@ export function InvoiceCard({
         slot.invoice.awaitingPersistence !== true && (
           <>
             <div className="qr-shell">
-              <QrCode
-                key={displayedPaymentRequest}
-                invoice={slot.invoice.bolt11}
-                {...(displayedPaymentRequest === undefined
-                  ? {}
-                  : { paymentRequest: displayedPaymentRequest })}
-              />
+              {renderQr ? (
+                <QrCode invoice={slot.invoice.bolt11} />
+              ) : (
+                <div className="qr-placeholder dormant" aria-hidden="true" />
+              )}
             </div>
             <button
               className="secondary-button full"
@@ -231,25 +226,10 @@ export function InvoiceCard({
             >
               결제 요청 복사
             </button>
-            {hasRichPaymentRequest && (
-              <button
-                className="text-button invoice-fallback-button"
-                type="button"
-                aria-pressed={showRichPaymentRequest}
-                onClick={() => {
-                  setShowRichPaymentRequest((current) => !current);
-                  setCopyFeedback(undefined);
-                }}
-              >
-                {showRichPaymentRequest
-                  ? "기본 BOLT11 QR 보기"
-                  : "메모 포함 결제 QR 보기"}
-              </button>
-            )}
             <div className="copy-feedback" aria-live="polite">
               {copyFeedback}
             </div>
-            {slot.status === "pending" && (
+            {slot.status === "pending" && renderQr && (
               <ExpiryCountdown expiresAt={slot.invoice.expiresAt} />
             )}
             {slot.invoice.verificationToken && !slot.verificationDelayed && (
@@ -267,11 +247,6 @@ export function InvoiceCard({
       {slot.status === "generating" && (
         <div className="loading-panel" aria-live="polite">
           안전하게 결제 요청을 확인하고 있습니다.
-        </div>
-      )}
-      {slot.status === "queued" && (
-        <div className="loading-panel" aria-live="polite">
-          앞 결제 요청이 끝나면 이 결제만 새로 발급합니다.
         </div>
       )}
       {slot.status === "pending" &&
@@ -305,8 +280,10 @@ export function InvoiceCard({
             {slot.failure?.code === "INVOICE_PERSISTENCE_FAILED"
               ? "표시하지 않은 결제 요청의 식별정보는 현재 화면에 유지됩니다."
               : slot.failure?.code === "PAYER_DATA_REQUIRED"
-                ? "이 주소는 invoice 발급에 필수 송금자 정보를 요구하여 현재 입력만으로는 만들 수 없습니다."
-                : "다른 결제의 성공 결과는 그대로 유지됩니다."}
+                ? "이 주소는 필수 송금자 정보를 요구하여 현재 입력만으로는 만들 수 없습니다."
+                : slot.failure?.code === "UNSUPPORTED_PAYMENT_FLOW"
+                  ? "이 주소는 결제 후 별도 동작이 필요하여 현재 방식으로는 안전하게 제공할 수 없습니다."
+                  : "다른 결제의 성공 결과는 그대로 유지됩니다."}
           </span>
           {slot.failure?.retryable !== false && (
             <button
@@ -343,15 +320,27 @@ export function InvoiceCard({
           </button>
         </div>
       )}
+      {slot.status === "legacyReviewRequired" && (
+        <div className="manual-panel" role="status">
+          <span>
+            이전 버전의 완료 기록은 확인 근거를 구분할 수 없습니다. 받는
+            지갑에서 입금을 확인하십시오.
+          </span>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onManualConfirm(slot.slotNumber)}
+          >
+            확인 후 완료로 표시
+          </button>
+        </div>
+      )}
       {slot.status === "pending" &&
         slot.invoice &&
         slot.invoice.awaitingPersistence !== true &&
         (!slot.invoice.verificationToken || slot.verificationDelayed) && (
           <div className="manual-panel">
-            {!slot.invoice.verificationToken && (
-              <strong>자동 결제 확인을 사용할 수 없습니다.</strong>
-            )}
-            <span>실제 입금을 직접 확인한 뒤에만 표시하십시오.</span>
+            <span>받는 지갑에서 입금을 확인한 뒤 완료로 표시하십시오.</span>
             <button
               className="secondary-button"
               type="button"
@@ -697,7 +686,37 @@ export function App() {
             markPendingInvoicesPersisted(current, pendingPersistence),
           );
       })
-      .catch(() => {
+      .catch((cause: unknown) => {
+        if (cause instanceof SessionPersistenceConflictError) {
+          sessionEpochRef.current += 1;
+          retryOperationRef.current = undefined;
+          setBusy(false);
+          setRetryingSlot(undefined);
+          setPersistenceError(
+            "다른 탭의 최신 정산 기록을 불러왔습니다. 한 탭에서 계속 진행하십시오.",
+          );
+          void loadActiveSession()
+            .then((stored) => {
+              if (!stored) {
+                setSession(null);
+                return;
+              }
+              const recovered = markExpiredSlots(
+                recoverInterruptedSession(stored),
+              );
+              const restoredIndex = firstActionableSlotIndex(recovered);
+              activeSlotIndexRef.current = restoredIndex;
+              restoredCarouselIndexRef.current = restoredIndex;
+              setActiveSlotIndex(restoredIndex);
+              setSession(recovered);
+            })
+            .catch(() => {
+              setPersistenceError(
+                "다른 탭의 최신 정산 기록을 불러오지 못했습니다. 새로고침 후 한 탭에서 계속 진행하십시오.",
+              );
+            });
+          return;
+        }
         setPersistenceError(
           "정산을 기기에 저장하지 못했습니다. 화면을 닫으면 복구되지 않을 수 있습니다.",
         );
@@ -753,6 +772,7 @@ export function App() {
       return;
     }
     const operationEpoch = sessionEpochRef.current + 1;
+    let startedSessionId: string | undefined;
     sessionEpochRef.current = operationEpoch;
     setBusy(true);
     setError(undefined);
@@ -766,12 +786,14 @@ export function App() {
         lockedPreview,
         lockedSnapshot,
       );
+      startedSessionId = generating.id;
       if (sessionEpochRef.current !== operationEpoch) return;
       activeSlotIndexRef.current = 0;
       restoredCarouselIndexRef.current = undefined;
       setActiveSlotIndex(0);
       setSession(generating);
       const response = await requestInvoiceBatch({
+        requestId: generating.id,
         address: draft.lightningAddress,
         ...(draft.overallNote ? { providerComment: draft.overallNote } : {}),
         slots: generating.slots.map((slot) => ({
@@ -794,14 +816,45 @@ export function App() {
       setError(message);
       if (
         cause instanceof ApiClientError &&
-        cause.code === "COMMENT_TOO_LONG"
+        cause.code === "COMMENT_TOO_LONG" &&
+        startedSessionId !== undefined
       ) {
-        setSession(null);
-        await clearActiveSession().catch(() =>
-          setPersistenceError(
-            "정산을 기기에서 정리하지 못했습니다. 메모를 수정한 뒤 다시 시도하십시오.",
-          ),
-        );
+        const expectedSessionId = startedSessionId;
+        try {
+          await clearActiveSession(expectedSessionId);
+          setSession((current) =>
+            current?.id === expectedSessionId ? null : current,
+          );
+        } catch (persistenceCause) {
+          if (persistenceCause instanceof SessionPersistenceConflictError) {
+            setPersistenceError(
+              "다른 탭의 최신 정산 기록을 불러왔습니다. 한 탭에서 계속 진행하십시오.",
+            );
+            try {
+              const stored = await loadActiveSession();
+              if (!stored) {
+                setSession(null);
+              } else {
+                const recovered = markExpiredSlots(
+                  recoverInterruptedSession(stored),
+                );
+                const restoredIndex = firstActionableSlotIndex(recovered);
+                activeSlotIndexRef.current = restoredIndex;
+                restoredCarouselIndexRef.current = restoredIndex;
+                setActiveSlotIndex(restoredIndex);
+                setSession(recovered);
+              }
+            } catch {
+              setPersistenceError(
+                "다른 탭의 최신 정산 기록을 불러오지 못했습니다. 새로고침 후 한 탭에서 계속 진행하십시오.",
+              );
+            }
+          } else {
+            setPersistenceError(
+              "정산을 기기에서 정리하지 못했습니다. 메모를 수정한 뒤 다시 시도하십시오.",
+            );
+          }
+        }
       } else {
         setSession((current) =>
           current
@@ -828,9 +881,6 @@ export function App() {
   const retrySlot = async (slotNumber: number) => {
     if (!session || retryOperationRef.current !== undefined) return;
     const excludedPaymentHashes = collectIssuedPaymentHashes(session);
-    const excludedInvoices = session.slots.flatMap((slot) =>
-      slot.invoice ? [slot.invoice.bolt11] : [],
-    );
     let prepared: SettlementSession;
     try {
       prepared = prepareSlotRetry(session, slotNumber);
@@ -849,6 +899,7 @@ export function App() {
     setSession(prepared);
     try {
       const response = await requestInvoiceBatch({
+        requestId: `${prepared.id}:${slotNumber}:${target.attempt}`,
         address: prepared.lightningAddress,
         ...(prepared.overallNote
           ? { providerComment: prepared.overallNote }
@@ -862,7 +913,6 @@ export function App() {
           },
         ],
         excludedPaymentHashes,
-        excludedInvoices,
       });
       if (sessionEpochRef.current === operationEpoch) {
         setSession((current) =>
@@ -872,7 +922,6 @@ export function App() {
                 slotNumber,
                 response,
                 excludedPaymentHashes,
-                excludedInvoices,
               )
             : current,
         );
@@ -908,113 +957,8 @@ export function App() {
     }
   };
 
-  const issueQueuedSlot = useCallback(
-    async (source: SettlementSession, slotNumber: number) => {
-      if (retryOperationRef.current !== undefined) return;
-      const excludedPaymentHashes = collectIssuedPaymentHashes(source);
-      const excludedInvoices = source.slots.flatMap((slot) =>
-        slot.invoice ? [slot.invoice.bolt11] : [],
-      );
-      let prepared: SettlementSession;
-      try {
-        prepared = prepareQueuedSlot(source, slotNumber);
-      } catch (cause) {
-        setError(toUserMessage(cause));
-        return;
-      }
-      const target = prepared.slots.find(
-        (slot) => slot.slotNumber === slotNumber,
-      )!;
-      const operationEpoch = sessionEpochRef.current;
-      const operationKey = `${prepared.id}:${slotNumber}:${target.attempt}`;
-      retryOperationRef.current = operationKey;
-      setRetryingSlot(slotNumber);
-      setError(undefined);
-      setSession(prepared);
-      try {
-        const response = await requestInvoiceBatch({
-          address: prepared.lightningAddress,
-          ...(prepared.overallNote
-            ? { providerComment: prepared.overallNote }
-            : {}),
-          slots: [
-            {
-              slotNumber: target.slotNumber,
-              targetSats: target.targetSats,
-              attempt: target.attempt,
-              ...(target.krwShare ? { krwShare: target.krwShare } : {}),
-            },
-          ],
-          excludedPaymentHashes,
-          excludedInvoices,
-        });
-        if (sessionEpochRef.current === operationEpoch) {
-          setSession((current) =>
-            current?.id === prepared.id
-              ? applySlotRetryResponse(
-                  current,
-                  slotNumber,
-                  response,
-                  excludedPaymentHashes,
-                  excludedInvoices,
-                )
-              : current,
-          );
-        }
-      } catch (cause) {
-        if (sessionEpochRef.current !== operationEpoch) return;
-        const message = toUserMessage(
-          cause,
-          "다음 결제 요청을 만들지 못했습니다.",
-        );
-        setError(message);
-        setSession((current) =>
-          current?.id === prepared.id
-            ? {
-                ...current,
-                slots: current.slots.map((slot) =>
-                  slot.slotNumber === slotNumber && slot.status === "generating"
-                    ? {
-                        ...slot,
-                        status: "failed" as const,
-                        failure: requestFailure(cause, "QUEUE_FAILED", message),
-                      }
-                    : slot,
-                ),
-              }
-            : current,
-        );
-      } finally {
-        if (retryOperationRef.current === operationKey) {
-          retryOperationRef.current = undefined;
-          setRetryingSlot(undefined);
-        }
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!session || busy || retryingSlot !== undefined) return;
-    if (
-      session.slots.some(
-        (slot) =>
-          slot.status === "pending" ||
-          slot.status === "generating" ||
-          slot.status === "verifyingExpired",
-      )
-    )
-      return;
-    const queued = session.slots.find((slot) => slot.status === "queued");
-    if (!queued) return;
-    const timer = window.setTimeout(
-      () => void issueQueuedSlot(session, queued.slotNumber),
-      0,
-    );
-    return () => window.clearTimeout(timer);
-  }, [busy, issueQueuedSlot, retryingSlot, session]);
-
   const resetSession = async () => {
+    const expectedSessionId = session?.id;
     sessionEpochRef.current += 1;
     retryOperationRef.current = undefined;
     setBusy(false);
@@ -1022,13 +966,40 @@ export function App() {
     activeSlotIndexRef.current = 0;
     restoredCarouselIndexRef.current = undefined;
     setActiveSlotIndex(0);
-    setSession(null);
     setError(undefined);
     try {
-      await clearActiveSession();
+      await clearActiveSession(expectedSessionId);
+      setSession((current) =>
+        expectedSessionId === undefined || current?.id === expectedSessionId
+          ? null
+          : current,
+      );
       setPersistenceError(undefined);
-    } catch {
-      setPersistenceError("기기에 저장된 정산 기록을 삭제하지 못했습니다.");
+    } catch (cause) {
+      if (cause instanceof SessionPersistenceConflictError) {
+        setPersistenceError(
+          "다른 탭의 최신 정산 기록을 불러왔습니다. 삭제하려면 내용을 확인한 뒤 다시 시도하십시오.",
+        );
+        try {
+          const stored = await loadActiveSession();
+          if (!stored) {
+            setSession(null);
+            return;
+          }
+          const recovered = markExpiredSlots(recoverInterruptedSession(stored));
+          const restoredIndex = firstActionableSlotIndex(recovered);
+          activeSlotIndexRef.current = restoredIndex;
+          restoredCarouselIndexRef.current = restoredIndex;
+          setActiveSlotIndex(restoredIndex);
+          setSession(recovered);
+        } catch {
+          setPersistenceError(
+            "다른 탭의 최신 정산 기록을 불러오지 못했습니다. 새로고침 후 한 탭에서 계속 진행하십시오.",
+          );
+        }
+      } else {
+        setPersistenceError("기기에 저장된 정산 기록을 삭제하지 못했습니다.");
+      }
     }
   };
 
@@ -1061,7 +1032,7 @@ export function App() {
   const manualConfirm = (slotNumber: number) => {
     if (
       !window.confirm(
-        "실제 입금을 직접 확인했습니까? 이 표시는 Lightning 네트워크가 검증한 결과가 아닙니다.",
+        "받는 지갑에서 실제 입금을 확인했습니까? 이 표시는 앱이 자동 확인한 결과가 아닙니다.",
       )
     )
       return;
@@ -1182,43 +1153,21 @@ export function App() {
           onNewSettlement={() => void newSettlement()}
         />
         {session.overallNote &&
-          session.paymentDescriptionStatus === "embedded" && (
-            <p className="provider-comment-status" role="status">
-              결제 설명이 실제 BOLT11 설명 또는 설명 해시에 결합되었습니다. 이를
-              보존하는 지갑에서는 거래내역에서도 확인할 수 있습니다.
-            </p>
-          )}
-        {session.overallNote &&
-          session.paymentDescriptionStatus === "partial" && (
-            <div className="global-warning" role="status">
-              일부 결제 요청만 결제 설명을 BOLT11에 포함했습니다. invoice별
-              거래내역 표시는 다를 수 있습니다.
-            </div>
-          )}
-        {session.overallNote &&
-          session.paymentDescriptionStatus === "notEmbedded" && (
-            <div className="global-warning" role="status">
-              이 provider가 발급한 BOLT11에는 결제 설명이 포함되지 않았습니다.
-              지갑 거래내역에는 표시되지 않을 수 있습니다.
-            </div>
-          )}
-        {session.overallNote &&
-          session.paymentDescriptionStatus === undefined &&
           session.providerCommentStatus === "forwarded" && (
             <p className="provider-comment-status" role="status">
-              결제 설명을 지원되는 각 지갑 callback에 전달했습니다.
+              정산 메모를 받는 서비스에 전달했습니다. 결제 앱 표시는 앱마다 다를
+              수 있습니다.
             </p>
           )}
         {session.overallNote && session.providerCommentStatus === "partial" && (
           <div className="global-warning" role="status">
-            일부 결제 요청에만 결제 설명을 전달했습니다. 나머지는 이 기기에
-            저장했습니다.
+            정산 메모를 일부만 전달했습니다. 전체 메모는 이 기기에 저장했습니다.
           </div>
         )}
         {session.overallNote &&
           session.providerCommentStatus === "unsupported" && (
             <div className="global-warning" role="status">
-              이 주소는 메모 전달을 지원하지 않아 결제 설명을 이 기기에만
+              이 주소는 메모 전달을 지원하지 않아 정산 메모를 이 기기에만
               저장했습니다.
             </div>
           )}
@@ -1275,8 +1224,8 @@ export function App() {
         )}
         {duplicateSettledSlots.length > 0 && (
           <div className="global-error" role="alert">
-            {duplicateSettledSlots.join(", ")}번 결제에서 서로 다른 invoice의
-            중복 입금이 확인되었습니다. 수취 지갑의 거래내역을 확인하십시오.
+            {duplicateSettledSlots.join(", ")}번 결제에서 서로 다른 결제 요청의
+            중복 입금이 확인되었습니다. 받는 지갑의 거래내역을 확인하십시오.
           </div>
         )}
         <nav className="carousel-controls" aria-label="결제 QR 이동">
@@ -1306,12 +1255,13 @@ export function App() {
           aria-label="정산 결제 QR"
           onScroll={trackCarouselPosition}
         >
-          {session.slots.map((slot) => (
+          {session.slots.map((slot, index) => (
             <InvoiceCard
               key={`${slot.slotNumber}-${slot.attempt}`}
               slot={slot}
               candidates={session.participantNameCandidates}
               retrying={retryingSlot !== undefined}
+              renderQr={Math.abs(index - activeSlotIndex) <= 1}
               onAnnotate={annotate}
               onRetry={(slotNumber) => void retrySlot(slotNumber)}
               onManualConfirm={manualConfirm}
@@ -1351,13 +1301,16 @@ export function App() {
         <div className="people-row">
           <div>
             <label htmlFor="people">전체 인원</label>
-            <small>나를 포함합니다</small>
+            <small>나를 포함합니다 · 최대 {MAX_PEOPLE}명</small>
           </div>
           <div className="stepper">
             <button
               type="button"
               aria-label="인원 줄이기"
-              onClick={() => setTotalPeople((value) => Math.max(2, value - 1))}
+              disabled={totalPeople <= MIN_PEOPLE}
+              onClick={() =>
+                setTotalPeople((value) => Math.max(MIN_PEOPLE, value - 1))
+              }
             >
               −
             </button>
@@ -1365,15 +1318,24 @@ export function App() {
               id="people"
               aria-label="전체 인원"
               type="number"
-              min="2"
-              max="10"
+              min={MIN_PEOPLE}
+              max={MAX_PEOPLE}
               value={totalPeople}
-              onChange={(event) => setTotalPeople(Number(event.target.value))}
+              onChange={(event) => {
+                const value = event.currentTarget.valueAsNumber;
+                if (!Number.isFinite(value)) return;
+                setTotalPeople(
+                  Math.min(MAX_PEOPLE, Math.max(MIN_PEOPLE, Math.trunc(value))),
+                );
+              }}
             />
             <button
               type="button"
               aria-label="인원 늘리기"
-              onClick={() => setTotalPeople((value) => Math.min(10, value + 1))}
+              disabled={totalPeople >= MAX_PEOPLE}
+              onClick={() =>
+                setTotalPeople((value) => Math.min(MAX_PEOPLE, value + 1))
+              }
             >
               ＋
             </button>
@@ -1435,8 +1397,8 @@ export function App() {
             <small>
               {[...overallNote].length}/
               {DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters}자 ·
-              LUD-12 지원 provider에는 전달합니다. 거래내역 표시는 실제 BOLT11
-              포함 여부와 지갑 구현에 따라 달라집니다.
+              받을 수 있는 서비스에는 전달합니다. 결제 앱과 받는 지갑의 표시
+              여부는 각각 다를 수 있습니다.
             </small>
           </label>
           <label className="stacked-field">
@@ -1490,15 +1452,20 @@ export function App() {
                 : {})}
             />
             <p className="preview-note">
-              {inputMode === "krw"
-                ? "정산 시작 시 가격을 한 번 더 확인해 고정하며 이후 결제 금액은 바뀌지 않습니다."
-                : excludePayer
-                  ? "전체 공동비용을 인원수로 나누며 남는 sats는 정산자가 부담합니다."
-                  : "전체 공동비용을 모든 결제 요청에 정확히 나눕니다."}
+              {excludePayer
+                ? "전체 공동비용을 인원수로 나누며, 나누어떨어지지 않는 잔여분은 정산자가 부담합니다."
+                : "전체 공동비용을 인원수로 나누며, 잔여분은 앞 결제부터 1씩 더합니다."}
             </p>
+            {inputMode === "krw" && (
+              <p className="preview-note">
+                정산 시작 시 BTC 기준가격을 다시 확인해 고정합니다.
+              </p>
+            )}
           </>
-        ) : (
+        ) : totalAmount.trim() ? (
           <p className="inline-error">{preview.error}</p>
+        ) : (
+          <p className="preview-note">나눌 금액을 입력하십시오.</p>
         )}
       </section>
       {persistenceError && (

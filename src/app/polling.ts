@@ -11,22 +11,21 @@ export const POLLING_BACKOFF_MS = [
   5_000, 8_000, 13_000, 21_000, 30_000,
 ] as const;
 export const VERIFICATION_DELAY_FAILURE_THRESHOLD = 3;
+export const HISTORICAL_POLLING_INTERVAL_MS = 60_000;
 
 export function shouldMarkVerificationDelayed(failureCount: number): boolean {
   return failureCount >= VERIFICATION_DELAY_FAILURE_THRESHOLD;
 }
 
 export function isSlotPollable(slot: ClientSlot, nowMs = Date.now()): boolean {
-  const graceMs =
-    DEFAULT_LIGHTNING_POLICY.settlementFinalVerificationGraceSeconds * 1_000;
   const retentionMs =
     DEFAULT_LIGHTNING_POLICY.settlementHistoricalRetentionSeconds * 1_000;
   const pollDeadlineMs =
-    Date.parse(slot.invoice?.expiresAt ?? "") +
-    (slot.status === "manuallyConfirmed" ? retentionMs : graceMs);
+    Date.parse(slot.invoice?.expiresAt ?? "") + retentionMs;
   return (
     (slot.status === "pending" ||
       slot.status === "verifyingExpired" ||
+      slot.status === "expired" ||
       slot.status === "manuallyConfirmed") &&
     slot.invoice?.verificationToken !== undefined &&
     slot.invoice.awaitingPersistence !== true &&
@@ -83,6 +82,7 @@ export function settlementInvoiceIdentity(
     verificationToken === undefined ||
     (slot.status !== "pending" &&
       slot.status !== "verifyingExpired" &&
+      slot.status !== "expired" &&
       slot.status !== "manuallyConfirmed")
   ) {
     return undefined;

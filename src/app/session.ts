@@ -12,7 +12,6 @@ import {
 import type {
   InputMode,
   PaymentAnnotation,
-  PaymentDescriptionStatus,
   ProviderCommentStatus,
 } from "../domain/models";
 import { createLocalSettlementId } from "./localId";
@@ -63,7 +62,12 @@ function appendInvoiceHistory(
   now: Date,
 ): readonly HistoricalInvoiceAttempt[] {
   if (!slot.invoice) return history ?? [];
-  const current = history ?? [];
+  const retentionMs =
+    DEFAULT_LIGHTNING_POLICY.settlementHistoricalRetentionSeconds * 1_000;
+  const current = (history ?? []).filter(
+    (attempt) =>
+      Date.parse(attempt.invoice.expiresAt) + retentionMs > now.getTime(),
+  );
   if (
     current.some(
       (attempt) =>
@@ -88,6 +92,16 @@ function appendInvoiceHistory(
       attempt: slot.attempt,
       invoice: persistedInvoice(slot.invoice),
       retiredAt: now.toISOString(),
+      ...(slot.settledAt === undefined ? {} : { settledAt: slot.settledAt }),
+      ...(slot.confirmedAt === undefined
+        ? {}
+        : { confirmedAt: slot.confirmedAt }),
+      ...(slot.settlementEvidence === undefined
+        ? {}
+        : { settlementEvidence: slot.settlementEvidence }),
+      ...(slot.legacySettlement === undefined
+        ? {}
+        : { legacySettlement: slot.legacySettlement }),
     },
   ]);
 }
@@ -96,15 +110,6 @@ function mergeProviderCommentStatus(
   current: ProviderCommentStatus | undefined,
   next: ProviderCommentStatus | undefined,
 ): ProviderCommentStatus | undefined {
-  if (next === undefined) return current;
-  if (current === undefined || current === next) return next;
-  return "partial";
-}
-
-function mergePaymentDescriptionStatus(
-  current: PaymentDescriptionStatus | undefined,
-  next: PaymentDescriptionStatus | undefined,
-): PaymentDescriptionStatus | undefined {
   if (next === undefined) return current;
   if (current === undefined || current === next) return next;
   return "partial";
@@ -128,6 +133,9 @@ export function collectIssuedPaymentHashes(
     session.issuedPaymentHashes ?? [],
     session.slots.flatMap((slot) =>
       slot.invoice ? [slot.invoice.paymentHash] : [],
+    ),
+    (session.invoiceHistory ?? []).map(
+      (attempt) => attempt.invoice.paymentHash,
     ),
   );
 }
@@ -202,7 +210,7 @@ export function createGeneratingSession(
     status: "generating",
   }));
   return {
-    version: 1,
+    version: 2,
     id: idFactory(),
     inputMode: draft.inputMode,
     totalAmount: draft.totalAmount,
@@ -236,19 +244,10 @@ export function applyBatchResponse(
         inferProviderCommentStatus(response),
       )
     : undefined;
-  const paymentDescriptionStatus = session.overallNote
-    ? mergePaymentDescriptionStatus(
-        session.paymentDescriptionStatus,
-        response.provider.descriptionStatus,
-      )
-    : undefined;
   return {
     ...session,
     providerDomain: response.provider.domain,
     ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
-    ...(paymentDescriptionStatus === undefined
-      ? {}
-      : { paymentDescriptionStatus }),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       response.slots.flatMap((slot) =>
@@ -262,9 +261,7 @@ export function applyBatchResponse(
             status: "pending",
             invoice: { ...slot.invoice, awaitingPersistence: true },
           }
-        : slot.status === "deferred"
-          ? { ...slot, status: "queued" }
-          : { ...slot, status: "failed", failure: slot.failure },
+        : { ...slot, status: "failed", failure: slot.failure },
     ),
   };
 }
@@ -307,34 +304,11 @@ export function prepareSlotRetry(
   };
 }
 
-export function prepareQueuedSlot(
-  session: SettlementSession,
-  slotNumber: number,
-): SettlementSession {
-  if (
-    session.slots.some(
-      (slot) => slot.status === "pending" || slot.status === "generating",
-    )
-  ) {
-    throw new Error("현재 결제 요청을 먼저 완료하거나 만료를 기다리십시오.");
-  }
-  const target = session.slots.find((slot) => slot.slotNumber === slotNumber);
-  if (!target || target.status !== "queued")
-    throw new Error("대기 중인 결제 요청이 아닙니다.");
-  return {
-    ...session,
-    slots: session.slots.map((slot): ClientSlot =>
-      slot.slotNumber === slotNumber ? { ...slot, status: "generating" } : slot,
-    ),
-  };
-}
-
 export function applySlotRetryResponse(
   session: SettlementSession,
   slotNumber: number,
   response: BatchInvoiceResponseDto,
   excludedPaymentHashes: readonly string[],
-  excludedInvoices: readonly string[],
   now = new Date(),
 ): SettlementSession {
   if (
@@ -352,8 +326,7 @@ export function applySlotRetryResponse(
     return session;
   if (
     result.status === "pending" &&
-    (excludedPaymentHashes.includes(result.invoice.paymentHash) ||
-      excludedInvoices.includes(result.invoice.bolt11))
+    excludedPaymentHashes.includes(result.invoice.paymentHash)
   ) {
     throw new Error("이전 결제 요청이 재사용되어 안전하게 거부했습니다.");
   }
@@ -363,12 +336,15 @@ export function applySlotRetryResponse(
         inferProviderCommentStatus(response),
       )
     : undefined;
-  const paymentDescriptionStatus = session.overallNote
-    ? mergePaymentDescriptionStatus(
-        session.paymentDescriptionStatus,
-        response.provider.descriptionStatus,
-      )
-    : undefined;
+  if (
+    result.status === "pending" &&
+    current.invoice !== undefined &&
+    result.attempt === current.attempt &&
+    result.invoice.paymentHash === current.invoice.paymentHash &&
+    result.invoice.bolt11 === current.invoice.bolt11
+  ) {
+    return session;
+  }
   if (current.status !== "generating") {
     if (result.status !== "pending") return session;
     const issuedSlot: ClientSlot = {
@@ -380,9 +356,6 @@ export function applySlotRetryResponse(
       ...session,
       providerDomain: response.provider.domain,
       ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
-      ...(paymentDescriptionStatus === undefined
-        ? {}
-        : { paymentDescriptionStatus }),
       issuedPaymentHashes: mergePaymentHashes(
         session.issuedPaymentHashes ?? [],
         excludedPaymentHashes,
@@ -399,9 +372,6 @@ export function applySlotRetryResponse(
     ...session,
     providerDomain: response.provider.domain,
     ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
-    ...(paymentDescriptionStatus === undefined
-      ? {}
-      : { paymentDescriptionStatus }),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       excludedPaymentHashes,
@@ -415,9 +385,7 @@ export function applySlotRetryResponse(
             status: "pending",
             invoice: { ...result.invoice, awaitingPersistence: true },
           }
-        : result.status === "deferred"
-          ? { ...result, status: "queued" }
-          : { ...result, status: "failed", failure: result.failure };
+        : { ...result, status: "failed", failure: result.failure };
     }),
   };
 }
@@ -499,6 +467,7 @@ function isCurrentVerification(
     isSameInvoice(slot, identity) &&
     (slot.status === "pending" ||
       slot.status === "verifyingExpired" ||
+      slot.status === "expired" ||
       slot.status === "manuallyConfirmed") &&
     slot.invoice !== undefined
   );
@@ -518,6 +487,30 @@ function withoutVerificationToken(
   const { verificationToken: _verificationToken, ...remaining } = invoice;
   void _verificationToken;
   return remaining;
+}
+
+function withHistoricalNetworkSettlement(
+  attempt: HistoricalInvoiceAttempt,
+  settledAt: string,
+  providerStatus: string | null | undefined,
+): HistoricalInvoiceAttempt {
+  const {
+    confirmedAt: _confirmedAt,
+    legacySettlement: _legacySettlement,
+    ...networkSettled
+  } = attempt;
+  void _confirmedAt;
+  void _legacySettlement;
+  return {
+    ...networkSettled,
+    settledAt,
+    settlementEvidence: {
+      kind: "lud21",
+      checkedAt: settledAt,
+      preimagePresent: true,
+      ...(providerStatus === undefined ? {} : { providerStatus }),
+    },
+  };
 }
 
 function applyHistoricalSettlementResponse(
@@ -550,7 +543,13 @@ function applyHistoricalSettlementResponse(
       return {
         ...session,
         invoiceHistory: history.map((attempt, index) =>
-          index === historyIndex ? { ...attempt, settledAt } : attempt,
+          index === historyIndex
+            ? withHistoricalNetworkSettlement(
+                attempt,
+                settledAt,
+                response.providerStatus,
+              )
+            : attempt,
         ),
       };
     }
@@ -576,6 +575,14 @@ function applyHistoricalSettlementResponse(
               status: "settled",
               invoice: historicalAttempt.invoice,
               settledAt,
+              settlementEvidence: {
+                kind: "lud21",
+                checkedAt: settledAt,
+                preimagePresent: true,
+                ...(response.providerStatus === undefined
+                  ? {}
+                  : { providerStatus: response.providerStatus }),
+              },
               ...(slot.annotation === undefined
                 ? {}
                 : { annotation: slot.annotation }),
@@ -618,6 +625,7 @@ export function applySettlementResponse(
       isSameInvoice(slot, identity) &&
       (slot.status === "pending" ||
         slot.status === "verifyingExpired" ||
+        slot.status === "expired" ||
         slot.status === "manuallyConfirmed")
     ) {
       changed = true;
@@ -626,6 +634,14 @@ export function applySettlementResponse(
         ...current,
         status: "settled",
         settledAt: response.checkedAt ?? now.toISOString(),
+        settlementEvidence: {
+          kind: "lud21",
+          checkedAt: response.checkedAt ?? now.toISOString(),
+          preimagePresent: true,
+          ...(response.providerStatus === undefined
+            ? {}
+            : { providerStatus: response.providerStatus }),
+        },
       };
     }
     if (!isCurrentVerification(slot, identity)) return slot;
@@ -814,7 +830,8 @@ export function manuallyConfirmSlot(
   if (
     (target.status !== "pending" &&
       target.status !== "verifyingExpired" &&
-      target.status !== "expired") ||
+      target.status !== "expired" &&
+      target.status !== "legacyReviewRequired") ||
     !target.invoice
   ) {
     throw new Error(
@@ -823,15 +840,21 @@ export function manuallyConfirmSlot(
   }
   return {
     ...session,
-    slots: session.slots.map((slot): ClientSlot =>
-      slot.slotNumber === slotNumber
-        ? {
-            ...slot,
-            status: "manuallyConfirmed",
-            confirmedAt: now.toISOString(),
-          }
-        : slot,
-    ),
+    slots: session.slots.map((slot): ClientSlot => {
+      if (slot.slotNumber !== slotNumber) return slot;
+      const {
+        legacySettlement: _legacySettlement,
+        verificationDelayed: _verificationDelayed,
+        ...confirmed
+      } = slot;
+      void _legacySettlement;
+      void _verificationDelayed;
+      return {
+        ...confirmed,
+        status: "manuallyConfirmed",
+        confirmedAt: now.toISOString(),
+      };
+    }),
   };
 }
 
@@ -859,12 +882,16 @@ export function getSettlementProgress(
   session: SettlementSession,
 ): SettlementProgress {
   const completed = session.slots.filter(
-    (slot) => slot.status === "settled" || slot.status === "manuallyConfirmed",
+    (slot) =>
+      (slot.status === "settled" && slot.settlementEvidence !== undefined) ||
+      slot.status === "manuallyConfirmed",
   );
   return {
     completedCount: completed.length,
-    networkSettledCount: completed.filter((slot) => slot.status === "settled")
-      .length,
+    networkSettledCount: completed.filter(
+      (slot) =>
+        slot.status === "settled" && slot.settlementEvidence !== undefined,
+    ).length,
     manuallyConfirmedCount: completed.filter(
       (slot) => slot.status === "manuallyConfirmed",
     ).length,
@@ -884,11 +911,14 @@ export function duplicateSettledSlotNumbers(
   session: SettlementSession,
 ): readonly number[] {
   return session.slots.flatMap((slot) => {
-    if (slot.status !== "settled") return [];
+    const currentMayBePaid =
+      (slot.status === "settled" && slot.settlementEvidence !== undefined) ||
+      slot.status === "manuallyConfirmed";
+    if (!currentMayBePaid) return [];
     const settledHistoricalAttempts = (session.invoiceHistory ?? []).filter(
       (attempt) =>
         attempt.slotNumber === slot.slotNumber &&
-        attempt.settledAt !== undefined,
+        (attempt.settledAt !== undefined || attempt.confirmedAt !== undefined),
     ).length;
     return settledHistoricalAttempts > 0 ? [slot.slotNumber] : [];
   });

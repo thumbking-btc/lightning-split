@@ -49,7 +49,7 @@ describe("single LUD-21 settlement check", () => {
           fetcher: responseFetcher({
             settled,
             pr: "lnbc-test",
-            ...(settled ? { preimage } : {}),
+            ...(settled ? { preimage: preimage.toUpperCase() } : {}),
           }),
           now: () => Date.UTC(2030, 0, 1),
         },
@@ -78,6 +78,11 @@ describe("single LUD-21 settlement check", () => {
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
     await expect(
       checkSettlement(input, {
+        fetcher: responseFetcher({ settled: true, pr: "lnbc-test" }),
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    await expect(
+      checkSettlement(input, {
         fetcher: responseFetcher({
           settled: true,
           pr: "lnbc-test",
@@ -85,6 +90,30 @@ describe("single LUD-21 settlement check", () => {
         }),
       }),
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("accepts equivalent uppercase BOLT11 and bounds provider status evidence", async () => {
+    await expect(
+      checkSettlement(
+        {
+          verifyUrl: "https://wallet.example/verify/one",
+          expectedPaymentHash: "11".repeat(32),
+          expectedInvoice: "lnbc1test",
+        },
+        {
+          fetcher: responseFetcher({
+            settled: false,
+            pr: "LNBC1TEST",
+            status: "x".repeat(129),
+          }),
+          now: () => Date.UTC(2030, 0, 1),
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "unsettled",
+      settled: false,
+      providerStatus: null,
+    });
   });
 
   it("rejects a valid preimage paired with settled=false", async () => {

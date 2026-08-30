@@ -279,7 +279,7 @@ describe("v1 mobile accessibility states", () => {
     expect(verifyingHtml).not.toContain("결제 요청 복사");
   });
 
-  it("keeps raw BOLT11 as the default QR and offers richer payer metadata explicitly", () => {
+  it("offers exactly one canonical payment path without technical toggles", () => {
     const html = renderToStaticMarkup(
       <InvoiceCard
         slot={{
@@ -289,8 +289,6 @@ describe("v1 mobile accessibility states", () => {
           status: "pending",
           invoice: {
             bolt11: "lnbc1canonical",
-            paymentRequest:
-              "bitcoin:?lightning=lnbc1canonical&message=8%2F30%20dinner",
             paymentHash: "11".repeat(32),
             timestampSeconds: 1,
             expirySeconds: 3600,
@@ -307,8 +305,10 @@ describe("v1 mobile accessibility states", () => {
         onManualConfirm={vi.fn()}
       />,
     );
-    expect(html).toContain("메모 포함 결제 QR 보기");
-    expect(html).toContain('aria-pressed="false"');
+    expect(html.match(/qr-shell/gu)).toHaveLength(1);
+    expect(html).toContain("결제 요청 복사");
+    expect(html).not.toContain("BOLT11");
+    expect(html).not.toContain("메모 포함 결제 QR");
   });
 
   it("does not offer a futile retry when mandatory payer data is unsupported", () => {

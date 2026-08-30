@@ -4,131 +4,97 @@ import { createTestBolt11 } from "../test/bolt11-fixture";
 import { parseBatchInvoiceRequest, parseSettlementRequest } from "./contracts";
 
 describe("Worker API DTO validation", () => {
-  it("parses decimal-string amounts without Number conversion", () => {
+  it("parses decimal amounts, request identity, exclusions and comments", () => {
     const parsed = parseBatchInvoiceRequest({
+      requestId: "session-1:slot-1:attempt-2",
       address: "user@wallet.example",
-      capabilities: { deferredSlots: true },
       slots: [
-        { slotNumber: 1, krwShare: "21500", targetSats: "13438", attempt: 1 },
+        { slotNumber: 1, krwShare: "21500", targetSats: "13438", attempt: 2 },
       ],
+      excludedPaymentHashes: ["11".repeat(32), "11".repeat(32)],
+      providerComment: "8/30 고깃집 저녁",
     });
+    expect(parsed.requestId).toBe("session-1:slot-1:attempt-2");
     expect(parsed.slots[0]).toMatchObject({
       krwShare: 21_500n,
       targetSats: 13_438n,
     });
-    expect(parsed.supportsDeferredSlots).toBe(true);
+    expect(parsed.excludedPaymentHashes).toEqual(["11".repeat(32)]);
+    expect(parsed.providerComment).toBe("8/30 고깃집 저녁");
   });
 
-  it("rejects JSON numbers, zero values and oversized batches", () => {
+  it("accepts 20 slots and rejects 21 slots or numeric amounts", () => {
+    const slot = (index: number) => ({
+      slotNumber: index + 1,
+      targetSats: "1",
+      attempt: 1,
+    });
+    expect(
+      parseBatchInvoiceRequest({
+        requestId: "twenty-slots",
+        address: "user@wallet.example",
+        slots: Array.from({ length: 20 }, (_, index) => slot(index)),
+      }).slots,
+    ).toHaveLength(20);
     expect(() =>
       parseBatchInvoiceRequest({
+        requestId: "twenty-one-slots",
+        address: "user@wallet.example",
+        slots: Array.from({ length: 21 }, (_, index) => slot(index)),
+      }),
+    ).toThrowError();
+    expect(() =>
+      parseBatchInvoiceRequest({
+        requestId: "numeric-amount",
         address: "user@wallet.example",
         slots: [{ slotNumber: 1, targetSats: 1, attempt: 1 }],
       }),
     ).toThrowError();
-    expect(() =>
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        slots: [{ slotNumber: 1, targetSats: "0", attempt: 1 }],
-      }),
-    ).toThrowError();
-    expect(() =>
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        slots: Array.from({ length: 11 }, (_, index) => ({
-          slotNumber: index + 1,
-          targetSats: "1",
-          attempt: 1,
-        })),
-      }),
-    ).toThrowError();
   });
 
-  it("accepts only sealed tokens linked to an invoice and payment hash", () => {
-    const token = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+  it("validates request identity and the 255 character comment boundary", () => {
+    const base = {
+      requestId: "comment-boundary",
+      address: "user@wallet.example",
+      slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+    };
     expect(
-      parseSettlementRequest({
-        verificationToken: token,
-        paymentHash: "11".repeat(32),
-        bolt11: "lnbc1test",
-      }),
-    ).toEqual({
-      verificationToken: token,
-      paymentHash: "11".repeat(32),
-      bolt11: "lnbc1test",
-    });
+      parseBatchInvoiceRequest({ ...base, providerComment: "가".repeat(255) })
+        .providerComment,
+    ).toHaveLength(255);
     expect(() =>
-      parseSettlementRequest({
-        verificationToken: "https://wallet.example/verify",
-      }),
+      parseBatchInvoiceRequest({ ...base, requestId: "공백 불가" }),
+    ).toThrowError();
+    const { requestId: _requestId, ...missingRequestId } = base;
+    void _requestId;
+    expect(() => parseBatchInvoiceRequest(missingRequestId)).toThrowError(
+      /업데이트/u,
+    );
+    expect(() =>
+      parseBatchInvoiceRequest({ ...base, providerComment: "가".repeat(256) }),
     ).toThrowError();
   });
 
-  it("accepts long valid invoices in retry exclusions and settlement requests", () => {
+  it("accepts only v2 sealed verification tokens and long BOLT11 invoices", () => {
     const fixture = createTestBolt11({
       amountSats: 1_000n,
       fixtureId: "contract-long-invoice",
       description: "x".repeat(639),
     });
-    const token = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+    const token = `v2.${"a".repeat(16)}.${"b".repeat(32)}`;
     expect(fixture.invoice.length).toBeGreaterThan(1_200);
-
-    expect(
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 2 }],
-        excludedInvoices: [fixture.invoice],
-      }).excludedInvoices,
-    ).toEqual([fixture.invoice]);
     expect(
       parseSettlementRequest({
         verificationToken: token,
         paymentHash: fixture.paymentHash,
         bolt11: fixture.invoice,
-      }).bolt11,
-    ).toBe(fixture.invoice);
-  });
-
-  it("keeps an automatically forwarded provider comment and validates retry exclusions", () => {
-    const parsed = parseBatchInvoiceRequest({
-      address: "user@wallet.example",
-      slots: [{ slotNumber: 1, targetSats: "1000", attempt: 2 }],
-      excludedPaymentHashes: ["11".repeat(32)],
-      excludedInvoices: ["lnbc1test"],
-      providerComment: "8/30 고깃집 저녁",
-    });
-    expect(parsed.providerComment).toBe("8/30 고깃집 저녁");
-    expect(parsed.excludedPaymentHashes).toEqual(["11".repeat(32)]);
-    expect(parsed.excludedInvoices).toEqual(["lnbc1test"]);
-
-    const withoutComment = parseBatchInvoiceRequest({
-      address: "user@wallet.example",
-      slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
-    });
-    expect(withoutComment.providerComment).toBeUndefined();
-    expect(withoutComment.supportsDeferredSlots).toBe(false);
-    expect(() =>
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        capabilities: { deferredSlots: "yes" },
-        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
       }),
-    ).toThrowError();
-  });
-
-  it("accepts at most 255 provider-comment characters", () => {
-    expect(
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
-        providerComment: "가".repeat(255),
-      }).providerComment,
-    ).toHaveLength(255);
+    ).toMatchObject({ verificationToken: token, bolt11: fixture.invoice });
     expect(() =>
-      parseBatchInvoiceRequest({
-        address: "user@wallet.example",
-        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
-        providerComment: "가".repeat(256),
+      parseSettlementRequest({
+        verificationToken: token.replace("v2.", "v1."),
+        paymentHash: fixture.paymentHash,
+        bolt11: fixture.invoice,
       }),
     ).toThrowError();
   });

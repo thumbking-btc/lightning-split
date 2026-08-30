@@ -21,11 +21,11 @@ import {
   markAutomaticVerificationDelayed,
   markExpiredSlots,
   nextActionableSlotIndex,
-  prepareQueuedSlot,
   prepareSlotRetry,
   pendingInvoicePersistenceIdentities,
   type DraftInput,
 } from "./session";
+import { restoreSession, serializeSession } from "./persistence";
 import type { SettlementSession } from "./types";
 
 const SNAPSHOT: PriceSnapshotDto = {
@@ -92,66 +92,6 @@ describe("mobile settlement session", () => {
     ]);
   });
 
-  it("advances a restored legacy queued slot only after the active invoice finishes", () => {
-    const base: SettlementSession = {
-      version: 1,
-      id: "queued",
-      inputMode: "sats",
-      totalAmount: "3000",
-      totalPeople: 3,
-      excludePayer: false,
-      invoiceCount: 3,
-      lightningAddress: "user@wallet.example",
-      participantNameCandidates: [],
-      createdAt: "2030-01-01T00:00:00.000Z",
-      slots: [
-        {
-          slotNumber: 1,
-          targetSats: "1000",
-          attempt: 1,
-          status: "pending",
-          invoice: {
-            bolt11: "lnbc1first",
-            paymentHash: "11".repeat(32),
-            timestampSeconds: 1,
-            expirySeconds: 3600,
-            expiresAt: "2030-01-01T01:00:00.000Z",
-            payeeNodeId: `02${"11".repeat(32)}`,
-            featureBits: [],
-            providerDomain: "wallet.example",
-          },
-        },
-        {
-          slotNumber: 2,
-          targetSats: "1000",
-          attempt: 1,
-          status: "queued",
-        },
-        {
-          slotNumber: 3,
-          targetSats: "1000",
-          attempt: 1,
-          status: "queued",
-        },
-      ],
-    };
-    expect(() => prepareQueuedSlot(base, 2)).toThrowError();
-    const ready = {
-      ...base,
-      slots: [
-        { ...base.slots[0]!, status: "manuallyConfirmed" as const },
-        base.slots[1]!,
-        base.slots[2]!,
-      ],
-    };
-    const prepared = prepareQueuedSlot(ready, 2);
-    expect(prepared.slots.map((slot) => slot.status)).toEqual([
-      "manuallyConfirmed",
-      "generating",
-      "queued",
-    ]);
-  });
-
   it.each([
     [40, undefined],
     [0, "unsupported"],
@@ -177,8 +117,6 @@ describe("mobile settlement session", () => {
         provider: {
           domain: "wallet.example",
           commentAllowed,
-          descriptionStatus: "notEmbedded",
-          automaticSettlementAvailable: false,
         },
         slots: [
           {
@@ -198,7 +136,6 @@ describe("mobile settlement session", () => {
       });
 
       expect(applied.providerCommentStatus).toBe(expectedStatus);
-      expect(applied.paymentDescriptionStatus).toBe("notEmbedded");
     },
   );
 
@@ -262,7 +199,7 @@ describe("mobile settlement session", () => {
 
   it("reissues only failed or expired slots and increments the attempt", () => {
     const base: SettlementSession = {
-      version: 1,
+      version: 2,
       id: "retry",
       inputMode: "sats",
       totalAmount: "2000",
@@ -324,40 +261,36 @@ describe("mobile settlement session", () => {
       attempt: 2,
     });
     expect(expiredPrepared.issuedPaymentHashes).toEqual(["11".repeat(32)]);
-    const applied = applySlotRetryResponse(
-      prepared,
-      1,
-      {
-        ok: true,
-        provider: {
-          domain: "wallet.example",
-          commentAllowed: 0,
-          automaticSettlementAvailable: false,
-        },
-        slots: [
-          {
-            status: "pending",
-            slotNumber: 1,
-            targetSats: "1000",
-            attempt: 2,
-            invoice: {
-              bolt11: "lnbc1new",
-              paymentHash: "22".repeat(32),
-              timestampSeconds: 2,
-              expirySeconds: 3600,
-              expiresAt: "2030-01-01T01:00:00.000Z",
-              payeeNodeId: `02${"22".repeat(32)}`,
-              featureBits: [],
-              providerDomain: "wallet.example",
-            },
-          },
-        ],
-        completedCount: 1,
-        failedCount: 0,
+    const retryResponse = {
+      ok: true as const,
+      provider: {
+        domain: "wallet.example",
+        commentAllowed: 0,
       },
-      ["11".repeat(32)],
-      ["lnbc1old"],
-    );
+      slots: [
+        {
+          status: "pending" as const,
+          slotNumber: 1,
+          targetSats: "1000",
+          attempt: 2,
+          invoice: {
+            bolt11: "lnbc1new",
+            paymentHash: "22".repeat(32),
+            timestampSeconds: 2,
+            expirySeconds: 3600,
+            expiresAt: "2030-01-01T01:00:00.000Z",
+            payeeNodeId: `02${"22".repeat(32)}`,
+            featureBits: [],
+            providerDomain: "wallet.example",
+          },
+        },
+      ],
+      completedCount: 1,
+      failedCount: 0,
+    };
+    const applied = applySlotRetryResponse(prepared, 1, retryResponse, [
+      "11".repeat(32),
+    ]);
     expect(applied.slots[0]).toMatchObject({
       status: "pending",
       attempt: 2,
@@ -368,11 +301,31 @@ describe("mobile settlement session", () => {
       "11".repeat(32),
       "22".repeat(32),
     ]);
+    expect(
+      applySlotRetryResponse(applied, 1, retryResponse, ["11".repeat(32)]),
+    ).toBe(applied);
+    expect(
+      collectIssuedPaymentHashes({
+        ...base,
+        invoiceHistory: [
+          {
+            slotNumber: 1,
+            targetSats: "1000",
+            attempt: 1,
+            retiredAt: "2030-01-01T00:00:30.000Z",
+            invoice: {
+              ...base.slots[1]!.invoice!,
+              paymentHash: "33".repeat(32),
+            },
+          },
+        ],
+      }),
+    ).toEqual(["11".repeat(32), "33".repeat(32)]);
   });
 
   it("retains an expired invoice hash when a retry fails", () => {
     const expired: SettlementSession = {
-      version: 1,
+      version: 2,
       id: "expired-retry",
       inputMode: "sats",
       totalAmount: "1000",
@@ -410,7 +363,6 @@ describe("mobile settlement session", () => {
         provider: {
           domain: "wallet.example",
           commentAllowed: 0,
-          automaticSettlementAvailable: false,
         },
         slots: [
           {
@@ -429,7 +381,6 @@ describe("mobile settlement session", () => {
         failedCount: 1,
       },
       collectIssuedPaymentHashes(prepared),
-      ["lnbc1old"],
     );
     expect(collectIssuedPaymentHashes(failed)).toEqual(["11".repeat(32)]);
     expect(collectIssuedPaymentHashes(prepareSlotRetry(failed, 1))).toEqual([
@@ -460,7 +411,6 @@ describe("mobile settlement session", () => {
           provider: {
             domain: "wallet.example",
             commentAllowed: 0,
-            automaticSettlementAvailable: false,
           },
           slots: [
             {
@@ -484,7 +434,6 @@ describe("mobile settlement session", () => {
           failedCount: 0,
         },
         ["11".repeat(32)],
-        [],
       ),
     ).toThrow("재사용");
   });
@@ -558,7 +507,7 @@ describe("mobile settlement session", () => {
         createSettlementPreview(draft),
         undefined,
       );
-      const verificationToken = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+      const verificationToken = `v2.${"a".repeat(16)}.${"b".repeat(32)}`;
       const session: SettlementSession = {
         ...generating,
         slots: [
@@ -607,7 +556,7 @@ describe("mobile settlement session", () => {
       createSettlementPreview(draft),
       undefined,
     );
-    const verificationToken = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+    const verificationToken = `v2.${"a".repeat(16)}.${"b".repeat(32)}`;
     const pending: SettlementSession = {
       ...generating,
       slots: [
@@ -643,6 +592,8 @@ describe("mobile settlement session", () => {
         status: "settled",
         settled: true,
         checkedAt: "2030-01-01T00:03:00.000Z",
+        preimagePresent: true,
+        providerStatus: null,
       },
     );
     expect(networkSettled.slots[0]).toMatchObject({
@@ -684,7 +635,7 @@ describe("mobile settlement session", () => {
     const wrapped: SettlementSession = {
       ...mixed,
       slots: [
-        { ...mixed.slots[0]!, status: "queued" },
+        { ...mixed.slots[0]!, status: "failed" },
         {
           ...mixed.slots[1]!,
           status: "manuallyConfirmed",
@@ -729,7 +680,7 @@ describe("mobile settlement session", () => {
             payeeNodeId: `02${"11".repeat(32)}`,
             featureBits: [],
             providerDomain: "wallet.example",
-            verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+            verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
           },
         },
       ],
@@ -753,15 +704,16 @@ describe("mobile settlement session", () => {
   });
 
   it("preserves a retired invoice and accepts its late settlement after reissue", () => {
-    const verificationToken = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+    const verificationToken = `v2.${"a".repeat(16)}.${"b".repeat(32)}`;
     const base: SettlementSession = {
-      version: 1,
+      version: 2,
       id: "late-settlement",
       inputMode: "sats",
       totalAmount: "2000",
       totalPeople: 2,
       excludePayer: true,
       invoiceCount: 1,
+      payerShareSats: "1000",
       lightningAddress: "user@wallet.example",
       participantNameCandidates: [],
       createdAt: "2030-01-01T00:00:00.000Z",
@@ -802,7 +754,7 @@ describe("mobile settlement session", () => {
       }),
     ]);
 
-    const replacementToken = `v1.${"c".repeat(16)}.${"d".repeat(32)}`;
+    const replacementToken = `v2.${"c".repeat(16)}.${"d".repeat(32)}`;
     const replaced = applySlotRetryResponse(
       prepared,
       1,
@@ -811,7 +763,6 @@ describe("mobile settlement session", () => {
         provider: {
           domain: "wallet.example",
           commentAllowed: 0,
-          automaticSettlementAvailable: true,
         },
         slots: [
           {
@@ -836,9 +787,88 @@ describe("mobile settlement session", () => {
         failedCount: 0,
       },
       ["11".repeat(32)],
-      ["lnbc1old"],
       new Date("2030-01-01T01:02:01.000Z"),
     );
+    const manuallyConfirmedReplacement = manuallyConfirmSlot(
+      replaced,
+      1,
+      new Date("2030-01-01T01:02:01.500Z"),
+    );
+    const oldSettledAfterManualConfirmation = applySettlementResponse(
+      manuallyConfirmedReplacement,
+      {
+        slotNumber: 1,
+        attempt: 1,
+        paymentHash: "11".repeat(32),
+        verificationToken,
+      },
+      {
+        ok: true,
+        status: "settled",
+        settled: true,
+        checkedAt: "2030-01-01T01:02:02.000Z",
+        preimagePresent: true,
+        providerStatus: null,
+      },
+      new Date("2030-01-01T01:02:02.000Z"),
+    );
+    expect(oldSettledAfterManualConfirmation.slots[0]).toMatchObject({
+      status: "settled",
+      attempt: 1,
+      invoice: { paymentHash: "11".repeat(32) },
+    });
+    expect(oldSettledAfterManualConfirmation.invoiceHistory).toEqual([
+      expect.objectContaining({
+        attempt: 2,
+        confirmedAt: "2030-01-01T01:02:01.500Z",
+        invoice: expect.objectContaining({
+          paymentHash: "22".repeat(32),
+        }),
+      }),
+    ]);
+    expect(
+      duplicateSettledSlotNumbers(oldSettledAfterManualConfirmation),
+    ).toEqual([1]);
+    const manuallyThenNetworkSettled = applySettlementResponse(
+      oldSettledAfterManualConfirmation,
+      {
+        slotNumber: 1,
+        attempt: 2,
+        paymentHash: "22".repeat(32),
+        verificationToken: replacementToken,
+      },
+      {
+        ok: true,
+        status: "settled",
+        settled: true,
+        checkedAt: "2030-01-01T01:03:00.000Z",
+        preimagePresent: true,
+        providerStatus: "PAID",
+      },
+    );
+    expect(manuallyThenNetworkSettled.invoiceHistory?.[0]).toMatchObject({
+      attempt: 2,
+      settledAt: "2030-01-01T01:03:00.000Z",
+      settlementEvidence: {
+        kind: "lud21",
+        checkedAt: "2030-01-01T01:03:00.000Z",
+        preimagePresent: true,
+        providerStatus: "PAID",
+      },
+    });
+    expect(manuallyThenNetworkSettled.invoiceHistory?.[0]).not.toHaveProperty(
+      "confirmedAt",
+    );
+    expect(manuallyThenNetworkSettled.invoiceHistory?.[0]).not.toHaveProperty(
+      "legacySettlement",
+    );
+    expect(duplicateSettledSlotNumbers(manuallyThenNetworkSettled)).toEqual([
+      1,
+    ]);
+    expect(
+      restoreSession(serializeSession(manuallyThenNetworkSettled)),
+    ).toEqual(manuallyThenNetworkSettled);
+
     const lateSettled = applySettlementResponse(
       replaced,
       {
@@ -852,6 +882,8 @@ describe("mobile settlement session", () => {
         status: "settled",
         settled: true,
         checkedAt: "2030-01-01T01:02:02.000Z",
+        preimagePresent: true,
+        providerStatus: null,
       },
       new Date("2030-01-01T01:02:02.000Z"),
     );
@@ -883,12 +915,19 @@ describe("mobile settlement session", () => {
         status: "settled",
         settled: true,
         checkedAt: "2030-01-01T01:03:00.000Z",
+        preimagePresent: true,
+        providerStatus: null,
       },
     );
     expect(duplicateSettled.slots[0]?.status).toBe("settled");
     expect(duplicateSettled.invoiceHistory?.[0]).toMatchObject({
       attempt: 2,
       settledAt: "2030-01-01T01:03:00.000Z",
+      settlementEvidence: {
+        kind: "lud21",
+        checkedAt: "2030-01-01T01:03:00.000Z",
+        preimagePresent: true,
+      },
     });
     expect(duplicateSettledSlotNumbers(duplicateSettled)).toEqual([1]);
     expect(duplicateSettledSlotNumbers(lateSettled)).toEqual([]);
@@ -913,7 +952,6 @@ describe("mobile settlement session", () => {
       provider: {
         domain: "wallet.example",
         commentAllowed: 0,
-        automaticSettlementAvailable: false,
       },
       slots: [
         {
@@ -965,9 +1003,9 @@ describe("mobile settlement session", () => {
   });
 
   it("exposes manual fallback after verification delay and clears it on recovery", () => {
-    const token = `v1.${"a".repeat(16)}.${"b".repeat(32)}`;
+    const token = `v2.${"a".repeat(16)}.${"b".repeat(32)}`;
     const session: SettlementSession = {
-      version: 1,
+      version: 2,
       id: "verification-delay",
       inputMode: "sats",
       totalAmount: "2000",
@@ -1009,6 +1047,9 @@ describe("mobile settlement session", () => {
       ok: true,
       status: "unsettled",
       settled: false,
+      checkedAt: "2030-01-01T00:00:30.000Z",
+      preimagePresent: false,
+      providerStatus: null,
     });
     expect(recovered.slots[0]?.verificationDelayed).toBeUndefined();
   });

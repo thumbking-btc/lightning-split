@@ -1,6 +1,6 @@
 const SATS_PER_BTC = 100_000_000n;
-const MIN_PEOPLE = 2;
-const MAX_PEOPLE = 10;
+export const MIN_PEOPLE = 2;
+export const MAX_PEOPLE = 20;
 const MAX_SAFE_AMOUNT = BigInt(Number.MAX_SAFE_INTEGER);
 
 export type MoneyValidationCode =
@@ -48,7 +48,7 @@ function assertPeopleCount(people: number): void {
   ) {
     throw new MoneyValidationError(
       "INVALID_PEOPLE_COUNT",
-      `People must be an integer between ${MIN_PEOPLE} and ${MAX_PEOPLE}.`,
+      `인원은 ${MIN_PEOPLE}명 이상 ${MAX_PEOPLE}명 이하의 정수여야 합니다.`,
     );
   }
 }
@@ -60,14 +60,18 @@ function assertPositiveSafeAmount(
   if (typeof amount !== "bigint" || amount <= 0n) {
     throw new MoneyValidationError(
       field === "price" ? "INVALID_PRICE" : "INVALID_AMOUNT",
-      `${field} must be a positive integer.`,
+      field === "price"
+        ? "BTC 기준가격은 1 이상의 정수여야 합니다."
+        : "금액은 1 이상의 정수여야 합니다.",
     );
   }
 
   if (amount > MAX_SAFE_AMOUNT) {
     throw new MoneyValidationError(
       "UNSAFE_AMOUNT",
-      `${field} must not exceed Number.MAX_SAFE_INTEGER at the input boundary.`,
+      field === "price"
+        ? "BTC 기준가격이 안전하게 처리할 수 있는 범위를 넘었습니다."
+        : "금액이 안전하게 처리할 수 있는 범위를 넘었습니다.",
     );
   }
 }
@@ -86,7 +90,7 @@ function assertPositiveInvoiceShares(invoiceShares: readonly bigint[]): void {
   if (invoiceShares.some((share) => share === 0n)) {
     throw new MoneyValidationError(
       "ZERO_INVOICE_TARGET",
-      "Every invoice target must be greater than zero.",
+      "각 결제 금액은 1 sat 이상이어야 합니다.",
     );
   }
 }
@@ -97,7 +101,7 @@ export function bigintFromSafeInteger(value: number, field = "amount"): bigint {
       Number.isFinite(value) && value > Number.MAX_SAFE_INTEGER
         ? "UNSAFE_AMOUNT"
         : "INVALID_AMOUNT",
-      `${field} must be a positive safe integer.`,
+      `${field} 값은 안전하게 처리할 수 있는 1 이상의 정수여야 합니다.`,
     );
   }
 
@@ -164,7 +168,7 @@ export function createKrwSplitPlan(
   if (targetSats.some((amount) => amount === 0n)) {
     throw new MoneyValidationError(
       "ZERO_INVOICE_TARGET",
-      "Every converted invoice target must be at least one sat.",
+      "환산된 각 결제 금액은 1 sat 이상이어야 합니다.",
     );
   }
 

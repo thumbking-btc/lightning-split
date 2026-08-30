@@ -27,10 +27,9 @@ export interface PriceResponseDto {
 }
 
 export interface BatchInvoiceRequestDto {
+  /** Client-generated key used to make a retried batch request idempotent. */
+  readonly requestId: string;
   readonly address: string;
-  readonly capabilities?: {
-    readonly deferredSlots: boolean;
-  };
   readonly slots: readonly {
     readonly slotNumber: number;
     readonly krwShare?: string;
@@ -38,7 +37,6 @@ export interface BatchInvoiceRequestDto {
     readonly attempt: number;
   }[];
   readonly excludedPaymentHashes?: readonly string[];
-  readonly excludedInvoices?: readonly string[];
   readonly providerComment?: string;
 }
 
@@ -59,17 +57,7 @@ export interface PendingInvoiceSlotDto {
     readonly providerDomain: string;
     readonly disposable?: boolean;
     readonly verificationToken?: string;
-    /** Provider-neutral QR/copy payload; omitted for legacy Workers. */
-    readonly paymentRequest?: string;
   };
-}
-
-export interface DeferredInvoiceSlotDto {
-  readonly status: "deferred";
-  readonly slotNumber: number;
-  readonly krwShare?: string;
-  readonly targetSats: string;
-  readonly attempt: number;
 }
 
 export interface FailedInvoiceSlotDto {
@@ -91,12 +79,8 @@ export interface BatchInvoiceResponseDto {
     readonly domain: string;
     readonly commentAllowed: number;
     readonly commentStatus?: "forwarded" | "unsupported" | "partial";
-    readonly descriptionStatus?: "embedded" | "notEmbedded" | "partial";
-    readonly automaticSettlementAvailable: boolean;
   };
-  readonly slots: readonly (
-    PendingInvoiceSlotDto | FailedInvoiceSlotDto | DeferredInvoiceSlotDto
-  )[];
+  readonly slots: readonly (PendingInvoiceSlotDto | FailedInvoiceSlotDto)[];
   readonly completedCount: number;
   readonly failedCount: number;
 }
@@ -107,14 +91,28 @@ export interface SettlementRequestDto {
   readonly bolt11: string;
 }
 
-export interface SettlementResponseDto {
-  readonly ok: true;
-  readonly status: "settled" | "unsettled" | "expired" | "notAvailable";
-  readonly settled: boolean;
-  readonly checkedAt?: string;
-  readonly preimagePresent?: boolean;
-  readonly providerStatus?: string | null;
-}
+export type SettlementResponseDto =
+  | {
+      readonly ok: true;
+      readonly status: "settled";
+      readonly settled: true;
+      readonly checkedAt: string;
+      readonly preimagePresent: true;
+      readonly providerStatus: string | null;
+    }
+  | {
+      readonly ok: true;
+      readonly status: "unsettled";
+      readonly settled: false;
+      readonly checkedAt: string;
+      readonly preimagePresent: false;
+      readonly providerStatus: string | null;
+    }
+  | {
+      readonly ok: true;
+      readonly status: "expired" | "notAvailable";
+      readonly settled: false;
+    };
 
 function parsePositiveSafeInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
@@ -130,9 +128,8 @@ export function parseBatchInvoiceRequest(value: unknown): {
   readonly address: string;
   readonly slots: readonly InvoiceSlotRequest[];
   readonly excludedPaymentHashes: readonly string[];
-  readonly excludedInvoices: readonly string[];
   readonly providerComment?: string;
-  readonly supportsDeferredSlots: boolean;
+  readonly requestId: string;
 } {
   if (
     !isRecord(value) ||
@@ -148,7 +145,7 @@ export function parseBatchInvoiceRequest(value: unknown): {
     value.address.length < 3 ||
     value.address.length > 320 ||
     value.slots.length < 1 ||
-    value.slots.length > 10
+    value.slots.length > DEFAULT_LIGHTNING_POLICY.maximumBatchSize
   ) {
     throw new InfrastructureError(
       "INVALID_INPUT",
@@ -217,13 +214,6 @@ export function parseBatchInvoiceRequest(value: unknown): {
     64,
     100,
   );
-  const excludedInvoices = parseStringList(
-    value.excludedInvoices,
-    "excludedInvoices",
-    /^lnbc[0123456789acdefghjklmnpqrstuvwxyz]+$/u,
-    MAX_BOLT11_LENGTH,
-    10,
-  );
   if (
     value.providerComment !== undefined &&
     (typeof value.providerComment !== "string" ||
@@ -236,27 +226,28 @@ export function parseBatchInvoiceRequest(value: unknown): {
       "providerComment is invalid.",
     );
   }
+  const requestId = value.requestId;
   if (
-    value.capabilities !== undefined &&
-    (!isRecord(value.capabilities) ||
-      typeof value.capabilities.deferredSlots !== "boolean")
+    typeof requestId !== "string" ||
+    !/^[A-Za-z0-9._:-]{1,160}$/u.test(requestId)
   ) {
-    throw new InfrastructureError("INVALID_INPUT", "capabilities is invalid.");
+    throw new InfrastructureError(
+      "INVALID_INPUT",
+      "앱이 업데이트되었습니다. 페이지를 새로고침한 뒤 다시 시도하십시오.",
+    );
   }
   return Object.freeze({
     address: value.address,
     slots: Object.freeze(slots),
     excludedPaymentHashes,
-    excludedInvoices,
-    supportsDeferredSlots:
-      isRecord(value.capabilities) && value.capabilities.deferredSlots === true,
+    requestId,
     ...(typeof value.providerComment === "string"
       ? { providerComment: value.providerComment }
       : {}),
   });
 }
 
-const TOKEN_PATTERN = /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
+const TOKEN_PATTERN = /^v2\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 
 export function parseSettlementRequest(value: unknown): SettlementRequestDto {
   if (

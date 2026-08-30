@@ -16,6 +16,10 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   INVALID_BOLT11: "안전하게 확인할 수 없는 결제 요청이 반환되었습니다.",
   DUPLICATE_PAYMENT_HASH: "이전 결제 요청이 재사용되어 안전하게 중단했습니다.",
   BATCH_ABORTED: "안전 확인 문제로 남은 결제 요청 생성을 중단했습니다.",
+  UNSUPPORTED_PAYMENT_FLOW:
+    "이 주소는 결제 후 별도 동작이 필요하여 현재 방식으로는 사용할 수 없습니다.",
+  ISSUANCE_UNKNOWN:
+    "발급 결과를 확인할 수 없습니다. 받는 지갑을 확인한 뒤 새 정산을 시작하십시오.",
   CONFIGURATION_ERROR: "서비스 보안 설정이 준비되지 않았습니다.",
 });
 

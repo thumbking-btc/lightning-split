@@ -276,10 +276,18 @@ describe("KRW to sats conversion", () => {
 });
 
 describe("input validation", () => {
-  it.each([1, 11])("rejects %i people", (people) => {
-    expect(() => splitKrw(1_000n, people)).toThrowError(MoneyValidationError);
+  it.each([1, 21])("rejects %i people", (people) => {
+    expect(() => splitKrw(1_000n, people)).toThrowError(
+      "인원은 2명 이상 20명 이하의 정수여야 합니다.",
+    );
     expect(() => createSatsSplitPlan(1_000n, people, true)).toThrowError(
       MoneyValidationError,
+    );
+  });
+
+  it("accepts the 20-person product limit", () => {
+    expect(createSatsSplitPlan(2_000n, 20, false).invoiceShares).toHaveLength(
+      20,
     );
   });
 
@@ -301,7 +309,10 @@ describe("input validation", () => {
 
   it("rejects sats totals that cannot provide one sat per invoice", () => {
     expect(() => createSatsSplitPlan(1n, 2, true)).toThrowError(
-      expect.objectContaining({ code: "ZERO_INVOICE_TARGET" }),
+      expect.objectContaining({
+        code: "ZERO_INVOICE_TARGET",
+        message: "각 결제 금액은 1 sat 이상이어야 합니다.",
+      }),
     );
   });
 

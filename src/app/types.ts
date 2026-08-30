@@ -2,19 +2,18 @@ import type { PriceSnapshotDto } from "../api/serialization";
 import type {
   InputMode,
   PaymentAnnotation,
-  PaymentDescriptionStatus,
   ProviderCommentStatus,
 } from "../domain/models";
 
-export const MAX_INVOICE_HISTORY = 10;
+export const MAX_INVOICE_HISTORY = 40;
 
 export type ClientSlotStatus =
   | "generating"
-  | "queued"
   | "pending"
   | "verifyingExpired"
   | "settled"
   | "manuallyConfirmed"
+  | "legacyReviewRequired"
   | "expired"
   | "failed";
 
@@ -29,12 +28,23 @@ export interface ClientInvoice {
   readonly providerDomain: string;
   readonly disposable?: boolean;
   readonly verificationToken?: string;
-  readonly paymentRequest?: string;
   /**
    * Present only between receiving an invoice and durably storing that exact
    * session state. Legacy invoices omit it and are therefore display-ready.
    */
   readonly awaitingPersistence?: true;
+}
+
+export interface SettlementEvidence {
+  readonly kind: "lud21";
+  readonly checkedAt: string;
+  readonly preimagePresent: true;
+  readonly providerStatus?: string | null;
+}
+
+export interface LegacySettlementRecord {
+  readonly source: "legacyUnknown";
+  readonly observedAt: string;
 }
 
 export interface HistoricalInvoiceAttempt {
@@ -45,6 +55,10 @@ export interface HistoricalInvoiceAttempt {
   readonly invoice: ClientInvoice;
   readonly retiredAt: string;
   readonly settledAt?: string;
+  /** User-provided confirmation retained when a newer attempt is retired. */
+  readonly confirmedAt?: string;
+  readonly settlementEvidence?: SettlementEvidence;
+  readonly legacySettlement?: LegacySettlementRecord;
 }
 
 export interface ClientSlot {
@@ -62,11 +76,13 @@ export interface ClientSlot {
   readonly settledAt?: string;
   readonly confirmedAt?: string;
   readonly verificationDelayed?: true;
+  readonly settlementEvidence?: SettlementEvidence;
+  readonly legacySettlement?: LegacySettlementRecord;
   readonly annotation?: PaymentAnnotation;
 }
 
 export interface SettlementSession {
-  readonly version: 1;
+  readonly version: 2;
   readonly id: string;
   readonly inputMode: InputMode;
   readonly totalAmount: string;
@@ -80,7 +96,6 @@ export interface SettlementSession {
   readonly payerShareKrw?: string;
   readonly payerShareSats?: string;
   readonly providerCommentStatus?: ProviderCommentStatus;
-  readonly paymentDescriptionStatus?: PaymentDescriptionStatus;
   readonly createdAt: string;
   readonly providerDomain?: string;
   readonly issuedPaymentHashes?: readonly string[];

@@ -16,6 +16,7 @@ export type InfrastructureErrorCode =
   | "INVALID_BOLT11"
   | "DUPLICATE_PAYMENT_HASH"
   | "BATCH_ABORTED"
+  | "UNSUPPORTED_PAYMENT_FLOW"
   | "CONFIGURATION_ERROR";
 
 export interface InfrastructureErrorOptions {

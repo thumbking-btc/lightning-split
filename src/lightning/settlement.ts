@@ -38,6 +38,14 @@ function hexToBytes(value: string): Uint8Array {
   );
 }
 
+function isSameBolt11(left: unknown, right: string): boolean {
+  return (
+    typeof left === "string" &&
+    (left === left.toLowerCase() || left === left.toUpperCase()) &&
+    left.toLowerCase() === right.toLowerCase()
+  );
+}
+
 export async function checkSettlement(
   input: SettlementCheckInput,
   dependencies: {
@@ -82,7 +90,7 @@ export async function checkSettlement(
       "The settlement response has no boolean settled field.",
     );
   }
-  if (value.pr !== input.expectedInvoice) {
+  if (!isSameBolt11(value.pr, input.expectedInvoice)) {
     throw new InfrastructureError(
       "INVALID_RESPONSE",
       "The settlement response invoice is missing or does not match.",
@@ -90,13 +98,17 @@ export async function checkSettlement(
   }
   let preimagePresent = false;
   if (value.preimage !== undefined && value.preimage !== null) {
-    if (typeof value.preimage !== "string" || !isHex(value.preimage, 32)) {
+    const normalizedPreimage =
+      typeof value.preimage === "string"
+        ? value.preimage.toLowerCase()
+        : undefined;
+    if (normalizedPreimage === undefined || !isHex(normalizedPreimage, 32)) {
       throw new InfrastructureError(
         "INVALID_RESPONSE",
         "The settlement preimage is invalid.",
       );
     }
-    const computed = bytesToHex(sha256(hexToBytes(value.preimage)));
+    const computed = bytesToHex(sha256(hexToBytes(normalizedPreimage)));
     if (computed !== input.expectedPaymentHash) {
       throw new InfrastructureError(
         "INVALID_RESPONSE",
@@ -111,11 +123,20 @@ export async function checkSettlement(
       "The settlement response contradicts its payment preimage.",
     );
   }
+  if (value.settled && !preimagePresent) {
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      "The settled response is missing a matching payment preimage.",
+    );
+  }
   return Object.freeze({
     status: value.settled ? "settled" : "unsettled",
     settled: value.settled,
     checkedAt: new Date(now()).toISOString(),
     preimagePresent,
-    providerStatus: typeof value.status === "string" ? value.status : null,
+    providerStatus:
+      typeof value.status === "string" && value.status.length <= 128
+        ? value.status
+        : null,
   });
 }

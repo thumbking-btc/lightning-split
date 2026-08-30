@@ -8,7 +8,6 @@ import {
   parseProviderInteger,
   sanitizeProviderReason,
 } from "../infrastructure/validation";
-import { isValidNostrPublicKey } from "../nostr/event";
 import { MAX_BOLT11_LENGTH } from "./bolt11";
 
 const USERNAME_PATTERN = /^[a-z0-9._+-]{1,64}$/u;
@@ -32,8 +31,6 @@ export interface LnurlPayDiscovery extends NormalizedLightningAddress {
   > | null;
   readonly mandatoryPayerData: readonly string[];
   readonly commentAllowed: number;
-  readonly allowsNostr: boolean;
-  readonly nostrPubkey?: string;
 }
 
 export interface LnurlInvoiceResponse {
@@ -61,12 +58,6 @@ export type LnurlSuccessAction =
 
 export interface InvoiceRequestOptions {
   readonly comment?: string;
-  readonly nostr?: {
-    /** Exact, signed NIP-57 kind 9734 JSON. */
-    readonly requestJson: string;
-    /** Bech32 LNURL value committed to by the zap request. */
-    readonly lnurl: string;
-  };
 }
 
 function hasAtMostCharacters(value: string, maximum: number): boolean {
@@ -352,13 +343,6 @@ export class LnurlPayClient {
         // LUD-12 is optional. A malformed capability must not break LUD-06.
       }
     }
-    const nostrPubkey =
-      value.allowsNostr === true &&
-      typeof value.nostrPubkey === "string" &&
-      isValidNostrPublicKey(value.nostrPubkey.toLowerCase())
-        ? value.nostrPubkey.toLowerCase()
-        : undefined;
-    const allowsNostr = nostrPubkey !== undefined;
     return Object.freeze({
       ...normalized,
       callbackUrl,
@@ -369,8 +353,6 @@ export class LnurlPayClient {
       payerData: payerData.payerData,
       mandatoryPayerData: payerData.mandatory,
       commentAllowed,
-      allowsNostr,
-      ...(nostrPubkey === undefined ? {} : { nostrPubkey }),
     });
   }
 
@@ -412,27 +394,6 @@ export class LnurlPayClient {
         );
       }
       callback.searchParams.set("comment", options.comment);
-    }
-    if (options.nostr !== undefined) {
-      if (!discovery.allowsNostr || discovery.nostrPubkey === undefined) {
-        throw new InfrastructureError(
-          "INVALID_INPUT",
-          "The provider did not advertise NIP-57 invoice support.",
-        );
-      }
-      if (
-        options.nostr.requestJson.length < 1 ||
-        options.nostr.requestJson.length > 65_536 ||
-        options.nostr.lnurl.length < 1 ||
-        options.nostr.lnurl.length > 5_000
-      ) {
-        throw new InfrastructureError(
-          "INVALID_INPUT",
-          "The NIP-57 invoice request is invalid.",
-        );
-      }
-      callback.searchParams.set("nostr", options.nostr.requestJson);
-      callback.searchParams.set("lnurl", options.nostr.lnurl);
     }
     const { value } = await fetchBoundedJson(
       callback,

@@ -20,10 +20,7 @@ describe("local settlement ID", () => {
     expect(getRandomValues).toHaveBeenCalledOnce();
   });
 
-  it("still creates distinct local IDs without Web Crypto", () => {
-    const first = createLocalSettlementId(null, 1_000, () => 0.25);
-    const second = createLocalSettlementId(null, 1_000, () => 0.25);
-    expect(first).not.toBe(second);
-    expect(first).toMatch(/^local-/u);
+  it("refuses invoice idempotency keys without cryptographic randomness", () => {
+    expect(() => createLocalSettlementId(null)).toThrow("안전한 정산 식별자");
   });
 });

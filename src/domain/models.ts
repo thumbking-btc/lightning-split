@@ -1,10 +1,7 @@
 export type InputMode = "krw" | "sats";
 export type ProviderCommentStatus = "forwarded" | "unsupported" | "partial";
-export type PaymentDescriptionStatus = "embedded" | "notEmbedded" | "partial";
-export type PaymentRequestKind = "bolt11" | "bip321" | "lnurlPay";
 export type InvoiceSlotStatus =
   | "generating"
-  | "deferred"
   | "pending"
   | "settled"
   | "manuallyConfirmed"
@@ -62,21 +59,10 @@ export interface IssuedInvoice {
   readonly featureBits: readonly number[];
   readonly disposable?: boolean;
   readonly verifyUrl?: string;
-  readonly successAction?: import("../lightning/lnurl").LnurlSuccessAction;
-  readonly nostrVerification?: {
-    readonly relayChannel: string;
-    readonly relayUrl: string;
-    readonly providerPubkey: string;
-    readonly requestJson: string;
-    readonly requestId: string;
-    readonly recipientPubkey: string;
-    readonly lnurl: string;
-  };
   readonly provider: {
     readonly domain: string;
     readonly discoveryUrl: string;
     readonly callbackUrl: string;
-    readonly metadata?: string;
   };
 }
 
@@ -89,10 +75,6 @@ interface InvoiceSlotBase {
 
 export interface GeneratingInvoiceSlot extends InvoiceSlotBase {
   readonly status: "generating";
-}
-
-export interface DeferredInvoiceSlot extends InvoiceSlotBase {
-  readonly status: "deferred";
 }
 
 export interface FailedInvoiceSlot extends InvoiceSlotBase {
@@ -144,7 +126,6 @@ export interface ExpiredInvoiceSlot extends IssuedInvoiceSlotBase {
 
 export type InvoiceSlot =
   | GeneratingInvoiceSlot
-  | DeferredInvoiceSlot
   | PendingInvoiceSlot
   | SettledInvoiceSlot
   | ManuallyConfirmedInvoiceSlot
@@ -159,7 +140,6 @@ interface SettlementBatchBase {
   readonly slots: readonly InvoiceSlot[];
   readonly overallNote?: string;
   readonly providerCommentStatus?: ProviderCommentStatus;
-  readonly paymentDescriptionStatus?: PaymentDescriptionStatus;
   readonly participantNameCandidates: readonly ParticipantNameCandidate[];
   readonly createdAt: string;
 }

@@ -431,7 +431,8 @@ button {
 }
 .app-version button {
   margin-left: 0.4rem;
-  padding: 0.25rem 0.5rem;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
   border: 1px solid #d7ccb9;
   border-radius: 0.55rem;
   color: var(--ink);
@@ -676,6 +677,10 @@ button {
   background: linear-gradient(100deg, #eee 30%, #fafafa 50%, #eee 70%);
   background-size: 200% 100%;
   animation: shimmer 1.3s infinite;
+}
+.qr-placeholder.dormant {
+  background: #f3f0ea;
+  animation: none;
 }
 .expiry {
   margin: 0.55rem 0 0;

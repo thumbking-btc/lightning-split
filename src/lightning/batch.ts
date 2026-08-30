@@ -1,26 +1,13 @@
 import type { LightningPolicy } from "../config/policies";
 import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
-import { sha256 } from "@noble/hashes/sha2.js";
 import type {
-  DeferredInvoiceSlot,
   FailedInvoiceSlot,
-  PaymentDescriptionStatus,
   PendingInvoiceSlot,
   ProviderCommentStatus,
 } from "../domain/models";
 import { InfrastructureError } from "../infrastructure/errors";
-import type { ValidatedZapRequest } from "../nostr/zap";
-import { validateZapInvoice } from "../nostr/zap";
-import {
-  Bolt11InvoiceError,
-  type ValidatedBolt11Invoice,
-  validateBolt11Invoice,
-} from "./bolt11";
-import type {
-  LnurlInvoiceResponse,
-  LnurlPayDiscovery,
-  LnurlPayClient,
-} from "./lnurl";
+import { Bolt11InvoiceError, validateBolt11Invoice } from "./bolt11";
+import type { LnurlPayDiscovery, LnurlPayClient } from "./lnurl";
 
 export interface InvoiceSlotRequest {
   readonly slotNumber: number;
@@ -34,36 +21,22 @@ export interface GenerateInvoiceBatchInput {
   readonly slots: readonly InvoiceSlotRequest[];
   readonly providerComment?: string;
   readonly excludedPaymentHashes?: readonly string[];
-  readonly excludedInvoices?: readonly string[];
 }
 
 export interface GenerateInvoiceBatchResult {
   readonly discovery: LnurlPayDiscovery;
-  readonly slots: readonly (
-    PendingInvoiceSlot | FailedInvoiceSlot | DeferredInvoiceSlot
-  )[];
+  readonly slots: readonly (PendingInvoiceSlot | FailedInvoiceSlot)[];
   readonly completedCount: number;
   readonly failedCount: number;
   readonly providerCommentStatus?: ProviderCommentStatus;
-  readonly paymentDescriptionStatus?: PaymentDescriptionStatus;
 }
 
 export interface BatchDependencies {
   readonly client: Pick<LnurlPayClient, "discover" | "requestInvoice">;
   readonly policy?: LightningPolicy;
   readonly now?: () => number;
-  readonly prepareNostrPayment?: (
-    discovery: LnurlPayDiscovery,
-    slot: InvoiceSlotRequest,
-    providerComment?: string,
-  ) => Promise<NostrPaymentPreparation>;
-}
-
-export interface NostrPaymentPreparation {
-  readonly request: ValidatedZapRequest;
-  readonly relayChannel: string;
-  readonly relayUrl: string;
-  readonly providerPubkey: string;
+  /** Called after discovery and immediately before any payable callback. */
+  readonly onInvoiceRequestsStarting?: () => void | Promise<void>;
 }
 
 function failureSlot(
@@ -112,6 +85,15 @@ function validateBatchInput(
     );
   }
   if (
+    !Number.isSafeInteger(policy.providerRequestConcurrency) ||
+    policy.providerRequestConcurrency < 1
+  ) {
+    throw new InfrastructureError(
+      "CONFIGURATION_ERROR",
+      "The provider request concurrency is invalid.",
+    );
+  }
+  if (
     input.providerComment !== undefined &&
     (input.providerComment.length < 1 ||
       [...input.providerComment].length >
@@ -151,55 +133,43 @@ function validateBatchInput(
 function providerCommentForDiscovery(
   comment: string | undefined,
   discovery: LnurlPayDiscovery,
-): string | undefined {
-  if (
-    comment === undefined ||
-    discovery.commentAllowed === 0 ||
-    [...comment].length > discovery.commentAllowed
-  )
-    return undefined;
-  return comment;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return [...bytes]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function invoiceBindsPaymentDescription(
-  description: string,
-  invoice: {
-    readonly description?: string;
-    readonly descriptionHash?: string;
-  },
-  discovery: LnurlPayDiscovery,
-  alternateDescriptionPreimage?: string,
-): boolean {
-  if (invoice.description === description) return true;
-  if (!invoice.descriptionHash) return false;
-  if (
-    invoice.descriptionHash ===
-    bytesToHex(sha256(new TextEncoder().encode(description)))
-  )
-    return true;
-  if (
-    invoice.descriptionHash ===
-      bytesToHex(sha256(new TextEncoder().encode(discovery.metadata))) &&
-    discovery.metadataEntries.some(
-      (entry) =>
-        (entry[0] === "text/plain" || entry[0] === "text/long-desc") &&
-        entry[1] === description,
-    )
-  ) {
-    return true;
+): {
+  readonly comment?: string;
+  readonly truncated: boolean;
+} {
+  if (comment === undefined || discovery.commentAllowed === 0) {
+    return { truncated: false };
   }
-  return (
-    alternateDescriptionPreimage !== undefined &&
-    alternateDescriptionPreimage.includes(description) &&
-    invoice.descriptionHash ===
-      bytesToHex(sha256(new TextEncoder().encode(alternateDescriptionPreimage)))
+  const characters = [...comment];
+  if (characters.length <= discovery.commentAllowed) {
+    return { comment, truncated: false };
+  }
+  return {
+    comment: characters.slice(0, discovery.commentAllowed).join(""),
+    truncated: true,
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  map: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await map(values[index]!, index);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, () =>
+      worker(),
+    ),
   );
+  return results;
 }
 
 export async function generateInvoiceBatch(
@@ -209,117 +179,57 @@ export async function generateInvoiceBatch(
   const policy = dependencies.policy ?? DEFAULT_LIGHTNING_POLICY;
   const now = dependencies.now ?? Date.now;
   validateBatchInput(input, policy);
-  const invoices = new Set<string>(input.excludedInvoices ?? []);
-  const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
-  const commentStatuses: ProviderCommentStatus[] = [];
-  const descriptionStatuses: Exclude<PaymentDescriptionStatus, "partial">[] =
-    [];
-  const discoveryResults = await Promise.allSettled(
-    input.slots.map(() => dependencies.client.discover(input.address)),
+
+  // LUD-16 discovery describes one address. Reusing one fresh discovery
+  // response avoids an unnecessary provider burst without assuming that
+  // LUD-11's `disposable` flag permits invoice reuse.
+  const discovery = await dependencies.client.discover(input.address);
+  const providerComment = providerCommentForDiscovery(
+    input.providerComment,
+    discovery,
   );
-  const discovery = discoveryResults.find(
-    (result): result is PromiseFulfilledResult<LnurlPayDiscovery> =>
-      result.status === "fulfilled",
-  )?.value;
-  if (!discovery) {
-    const firstFailure = discoveryResults.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    throw firstFailure?.reason;
-  }
-  const generatedSlots = await Promise.all(
-    input.slots.map(async (slot, index) => {
-      const discoveryResult = discoveryResults[index];
-      if (!discoveryResult || discoveryResult.status === "rejected") {
-        return {
-          kind: "failure" as const,
-          slot: failureSlot(slot, discoveryResult?.reason),
-        };
-      }
-      const slotDiscovery = discoveryResult.value;
+  await dependencies.onInvoiceRequestsStarting?.();
+  const generatedSlots = await mapWithConcurrency(
+    input.slots,
+    policy.providerRequestConcurrency,
+    async (slot) => {
       try {
-        const providerComment = providerCommentForDiscovery(
-          input.providerComment,
-          slotDiscovery,
+        const callback = await dependencies.client.requestInvoice(
+          discovery,
+          slot.targetSats,
+          providerComment.comment === undefined
+            ? {}
+            : { comment: providerComment.comment },
         );
-        let nostrPreparation: NostrPaymentPreparation | undefined;
-        if (
-          slotDiscovery.allowsNostr &&
-          slotDiscovery.nostrPubkey !== undefined &&
-          dependencies.prepareNostrPayment !== undefined
-        ) {
-          try {
-            nostrPreparation = await dependencies.prepareNostrPayment(
-              slotDiscovery,
-              slot,
-              providerComment,
-            );
-          } catch {
-            // NIP-57 is optional. A local preparation failure must leave the
-            // base LUD-06 path available.
-          }
-        }
-        let callback: LnurlInvoiceResponse | undefined;
-        let validated: ValidatedBolt11Invoice | undefined;
-        if (nostrPreparation !== undefined) {
-          try {
-            callback = await dependencies.client.requestInvoice(
-              slotDiscovery,
-              slot.targetSats,
-              {
-                ...(providerComment === undefined
-                  ? {}
-                  : { comment: providerComment }),
-                nostr: {
-                  requestJson: nostrPreparation.request.json,
-                  lnurl: nostrPreparation.request.lnurl,
-                },
-              },
-            );
-            validated = validateZapInvoice(
-              callback.invoice,
-              nostrPreparation.request,
-            );
-            if (
-              validated.expiresAt - Math.floor(now() / 1_000) <
-              policy.minimumInvoiceRemainingSeconds
-            ) {
-              throw new Bolt11InvoiceError(
-                "EXPIRED",
-                "The NIP-57 invoice is expired or near expiry.",
-              );
-            }
-          } catch {
-            // A provider may advertise NIP-57 but reject a particular request.
-            // Retry the same slot through plain LUD-06; never turn an optional
-            // capability into a prerequisite for invoice creation.
-            nostrPreparation = undefined;
-          }
-        }
-        if (nostrPreparation === undefined) {
-          callback = await dependencies.client.requestInvoice(
-            slotDiscovery,
-            slot.targetSats,
-            providerComment === undefined ? {} : { comment: providerComment },
-          );
-          try {
-            validated = validateBolt11Invoice(callback.invoice, {
-              expectedSats: slot.targetSats,
-              nowSeconds: Math.floor(now() / 1_000),
-              minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
-            });
-          } catch (cause) {
-            throw new InfrastructureError(
-              "INVALID_BOLT11",
-              "The provider returned an invalid BOLT11 invoice.",
-              { cause },
-            );
-          }
-        }
-        if (callback === undefined || validated === undefined) {
+        if (callback.successAction !== undefined) {
+          // A raw BOLT11 payer cannot execute LUD-09 after payment. Silently
+          // dropping the action would change the provider's advertised flow.
           throw new InfrastructureError(
-            "INVALID_RESPONSE",
-            "The provider invoice result is incomplete.",
+            "UNSUPPORTED_PAYMENT_FLOW",
+            "The provider requires a post-payment action that this payment flow cannot preserve.",
+          );
+        }
+        let validated;
+        try {
+          validated = validateBolt11Invoice(callback.invoice, {
+            expectedSats: slot.targetSats,
+            nowSeconds: Math.floor(now() / 1_000),
+            minimumRemainingSeconds: policy.minimumInvoiceRemainingSeconds,
+          });
+          if (
+            validated.expiresAt - Math.floor(now() / 1_000) >
+            policy.maximumInvoiceRemainingSeconds
+          ) {
+            throw new Bolt11InvoiceError(
+              "EXPIRY",
+              "The provider invoice lifetime exceeds the supported replay window.",
+            );
+          }
+        } catch (cause) {
+          throw new InfrastructureError(
+            "INVALID_BOLT11",
+            "The provider returned an invalid BOLT11 invoice.",
+            { cause },
           );
         }
         const pendingSlot: PendingInvoiceSlot = {
@@ -334,36 +244,19 @@ export async function generateInvoiceBatch(
             payeeNodeId: validated.payeeNodeId,
             featureBits: validated.featureBits,
             disposable: callback.disposable,
-            ...(callback.verifyUrl !== undefined
-              ? { verifyUrl: callback.verifyUrl }
-              : {}),
-            ...(callback.successAction === undefined
+            ...(callback.verifyUrl === undefined
               ? {}
-              : { successAction: callback.successAction }),
-            ...(nostrPreparation === undefined
-              ? {}
-              : {
-                  nostrVerification: {
-                    relayChannel: nostrPreparation.relayChannel,
-                    relayUrl: nostrPreparation.relayUrl,
-                    providerPubkey: nostrPreparation.providerPubkey,
-                    requestJson: nostrPreparation.request.json,
-                    requestId: nostrPreparation.request.event.id,
-                    recipientPubkey: nostrPreparation.request.recipientPubkey,
-                    lnurl: nostrPreparation.request.lnurl,
-                  },
-                }),
+              : { verifyUrl: callback.verifyUrl }),
             provider: {
-              domain: slotDiscovery.domain,
-              discoveryUrl: slotDiscovery.discoveryUrl,
-              callbackUrl: slotDiscovery.callbackUrl,
-              metadata: slotDiscovery.metadata,
+              domain: discovery.domain,
+              discoveryUrl: discovery.discoveryUrl,
+              callbackUrl: discovery.callbackUrl,
             },
           },
           settlementCheck:
-            callback.verifyUrl || nostrPreparation !== undefined
-              ? { status: "notChecked" }
-              : { status: "notAvailable" },
+            callback.verifyUrl === undefined
+              ? { status: "notAvailable" }
+              : { status: "notChecked" },
         };
         return {
           kind: "success" as const,
@@ -373,32 +266,23 @@ export async function generateInvoiceBatch(
             input.providerComment === undefined
               ? undefined
               : callback.commentSent
-                ? ("forwarded" as const)
+                ? providerComment.truncated
+                  ? ("partial" as const)
+                  : ("forwarded" as const)
                 : ("unsupported" as const),
-          paymentDescriptionStatus:
-            input.providerComment === undefined
-              ? undefined
-              : invoiceBindsPaymentDescription(
-                    input.providerComment,
-                    validated,
-                    slotDiscovery,
-                    nostrPreparation?.request.event.content ===
-                      input.providerComment
-                      ? nostrPreparation.request.json
-                      : undefined,
-                  )
-                ? ("embedded" as const)
-                : ("notEmbedded" as const),
         };
       } catch (error) {
         return { kind: "failure" as const, slot: failureSlot(slot, error) };
       }
-    }),
+    },
   );
-  const results: (
-    PendingInvoiceSlot | FailedInvoiceSlot | DeferredInvoiceSlot
-  )[] = [];
+
+  const invoices = new Set<string>();
+  const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
+  const commentStatuses: ProviderCommentStatus[] = [];
+  const results: (PendingInvoiceSlot | FailedInvoiceSlot)[] = [];
   const responseNowSeconds = Math.floor(now() / 1_000);
+
   for (const generated of generatedSlots) {
     if (generated.kind === "failure") {
       results.push(generated.slot);
@@ -438,10 +322,9 @@ export async function generateInvoiceBatch(
     invoices.add(generated.slot.invoice.bolt11);
     hashes.add(generated.slot.invoice.paymentHash);
     results.push(generated.slot);
-    if (generated.providerCommentStatus !== undefined)
+    if (generated.providerCommentStatus !== undefined) {
       commentStatuses.push(generated.providerCommentStatus);
-    if (generated.paymentDescriptionStatus !== undefined)
-      descriptionStatuses.push(generated.paymentDescriptionStatus);
+    }
   }
 
   const completedCount = results.filter(
@@ -456,22 +339,12 @@ export async function generateInvoiceBatch(
         : commentStatuses.every((status) => status === "unsupported")
           ? ("unsupported" as const)
           : ("partial" as const);
-  const paymentDescriptionStatus =
-    input.providerComment === undefined || descriptionStatuses.length === 0
-      ? undefined
-      : descriptionStatuses.every((status) => status === "embedded")
-        ? ("embedded" as const)
-        : descriptionStatuses.every((status) => status === "notEmbedded")
-          ? ("notEmbedded" as const)
-          : ("partial" as const);
+
   return Object.freeze({
     discovery,
     slots: Object.freeze(results),
     completedCount,
     failedCount,
     ...(providerCommentStatus === undefined ? {} : { providerCommentStatus }),
-    ...(paymentDescriptionStatus === undefined
-      ? {}
-      : { paymentDescriptionStatus }),
   });
 }

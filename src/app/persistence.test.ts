@@ -15,7 +15,7 @@ import {
 import type { SettlementSession } from "./types";
 
 const SESSION: SettlementSession = {
-  version: 1,
+  version: 2,
   id: "saved-session",
   inputMode: "krw",
   totalAmount: "43000",
@@ -46,6 +46,12 @@ const SESSION: SettlementSession = {
       attempt: 1,
       status: "settled",
       settledAt: "2030-01-01T00:05:00.000Z",
+      settlementEvidence: {
+        kind: "lud21",
+        checkedAt: "2030-01-01T00:05:00.000Z",
+        preimagePresent: true,
+        providerStatus: "PAID",
+      },
       invoice: {
         bolt11: "lnbc-test",
         paymentHash: "11".repeat(32),
@@ -55,7 +61,7 @@ const SESSION: SettlementSession = {
         payeeNodeId: `02${"11".repeat(32)}`,
         featureBits: [],
         providerDomain: "wallet.example",
-        verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+        verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
       },
       annotation: {
         displayName: "철수",
@@ -77,6 +83,18 @@ describe("local settlement persistence", () => {
     };
     delete corrupted.slots[0]?.invoice;
     expect(() => restoreSession(JSON.stringify(corrupted))).toThrowError();
+    const unverifiedSettlement = JSON.parse(serializeSession(SESSION)) as {
+      slots: Array<Record<string, unknown>>;
+    };
+    delete unverifiedSettlement.slots[0]?.settlementEvidence;
+    expect(() =>
+      restoreSession(JSON.stringify(unverifiedSettlement)),
+    ).toThrowError();
+    const falsePreimage = JSON.parse(serializeSession(SESSION)) as {
+      slots: Array<{ settlementEvidence?: { preimagePresent?: boolean } }>;
+    };
+    falsePreimage.slots[0]!.settlementEvidence!.preimagePresent = false;
+    expect(() => restoreSession(JSON.stringify(falsePreimage))).toThrowError();
     const mismatchedTotal = JSON.parse(serializeSession(SESSION)) as {
       totalAmount: string;
     };
@@ -89,30 +107,176 @@ describe("local settlement persistence", () => {
   it("round-trips the active session through IndexedDB", async () => {
     await saveActiveSession(SESSION);
     await expect(loadActiveSession()).resolves.toEqual(SESSION);
-    await clearActiveSession();
+    await clearActiveSession(SESSION.id);
     await expect(loadActiveSession()).resolves.toBeNull();
   });
 
-  it("does not destructively delete an unknown stored schema", async () => {
+  it("round-trips required LUD-21 settlement evidence", () => {
+    expect(restoreSession(serializeSession(SESSION))).toEqual(SESSION);
+  });
+
+  it("preserves evidence-free v1 settlements for explicit review", () => {
+    const legacy = JSON.parse(serializeSession(SESSION)) as {
+      version: number;
+      paymentDescriptionStatus?: string;
+      slots: Array<Record<string, unknown>>;
+      invoiceHistory?: Array<Record<string, unknown>>;
+    };
+    legacy.version = 1;
+    legacy.paymentDescriptionStatus = "verified";
+    (legacy as { issuedPaymentHashes?: string[] }).issuedPaymentHashes = [
+      "11".repeat(32),
+      "22".repeat(32),
+    ];
+    delete legacy.slots[0]!.settlementEvidence;
+    legacy.invoiceHistory = [
+      {
+        slotNumber: 1,
+        krwShare: "21500",
+        targetSats: "13438",
+        attempt: 2,
+        invoice: {
+          ...SESSION.slots[0]!.invoice,
+          bolt11: "lnbc-legacy-history",
+          paymentHash: "22".repeat(32),
+        },
+        retiredAt: "2030-01-01T00:06:00.000Z",
+        settledAt: "2030-01-01T00:07:00.000Z",
+      },
+    ];
+
+    const restored = restoreSession(JSON.stringify(legacy));
+
+    expect(restored.version).toBe(2);
+    expect(restored.slots[0]).toMatchObject({
+      status: "legacyReviewRequired",
+      legacySettlement: {
+        source: "legacyUnknown",
+        observedAt: "2030-01-01T00:05:00.000Z",
+      },
+    });
+    expect(restored.slots[0]).not.toHaveProperty("settledAt");
+    expect(restored.slots[0]).not.toHaveProperty("settlementEvidence");
+    expect(restored.invoiceHistory?.[0]).toMatchObject({
+      legacySettlement: {
+        source: "legacyUnknown",
+        observedAt: "2030-01-01T00:07:00.000Z",
+      },
+    });
+    expect(restored.invoiceHistory?.[0]).not.toHaveProperty("settledAt");
+    expect(restored).not.toHaveProperty("paymentDescriptionStatus");
+  });
+
+  it("moves the production v1 key into the isolated v2 key", async () => {
+    const legacy = JSON.parse(serializeSession(SESSION)) as {
+      version: number;
+      slots: Array<Record<string, unknown>>;
+    };
+    legacy.version = 1;
+    delete legacy.slots[0]!.settlementEvidence;
     const database = await openDB("lightning-split", 1);
-    await database.put("settlements", '{"version":99}', "active");
+    await database.put("settlements", JSON.stringify(legacy), "active");
+    database.close();
+
+    await expect(loadActiveSession()).resolves.toMatchObject({
+      version: 2,
+      slots: [{ status: "legacyReviewRequired" }],
+    });
+
+    const inspectionDatabase = await openDB("lightning-split", 1);
+    await expect(
+      inspectionDatabase.get("settlements", "active"),
+    ).resolves.toBeUndefined();
+    expect(
+      JSON.parse(
+        String(await inspectionDatabase.get("settlements", "active-v2")),
+      ),
+    ).toMatchObject({ version: 2 });
+    inspectionDatabase.close();
+  });
+
+  it("quarantines an unknown stored schema without destroying its payload", async () => {
+    const database = await openDB("lightning-split", 1);
+    await database.put("settlements", '{"version":99}', "active-v2");
     database.close();
 
     await expect(loadActiveSession()).resolves.toBeNull();
 
     const inspectionDatabase = await openDB("lightning-split", 1);
-    await expect(inspectionDatabase.get("settlements", "active")).resolves.toBe(
-      '{"version":99}',
-    );
+    await expect(
+      inspectionDatabase.get("settlements", "active-v2"),
+    ).resolves.toBeUndefined();
+    await expect(
+      inspectionDatabase.get("settlements", "quarantine-v2"),
+    ).resolves.toBe('{"version":99}');
     inspectionDatabase.close();
+  });
+
+  it("rejects an invalid in-memory session before it reaches IndexedDB", async () => {
+    const invalid = {
+      ...SESSION,
+      totalAmount: "43001",
+    } as SettlementSession;
+
+    await expect(saveActiveSession(invalid)).rejects.toThrow(/합계/u);
+    await expect(loadActiveSession()).resolves.toBeNull();
   });
 
   it("does not let an in-flight save resurrect a cleared session", async () => {
     const saving = saveActiveSession(SESSION);
-    const clearing = clearActiveSession();
+    const clearing = clearActiveSession(SESSION.id);
 
     await Promise.all([saving, clearing]);
     await expect(loadActiveSession()).resolves.toBeNull();
+  });
+
+  it("rejects a stale-tab overwrite with an atomic revision check", async () => {
+    await saveActiveSession(SESSION);
+    const external: SettlementSession = {
+      ...SESSION,
+      slots: [
+        {
+          ...SESSION.slots[0]!,
+          annotation: {
+            displayName: "다른 탭",
+            updatedAt: "2030-01-01T00:07:00.000Z",
+          },
+        },
+      ],
+    };
+    const database = await openDB("lightning-split", 1);
+    const revision = Number(await database.get("settlements", "revision-v2"));
+    const transaction = database.transaction("settlements", "readwrite");
+    await transaction.store.put(serializeSession(external), "active-v2");
+    await transaction.store.put(revision + 1, "revision-v2");
+    await transaction.done;
+    database.close();
+
+    await expect(saveActiveSession(SESSION)).rejects.toThrow(
+      "다른 탭에서 정산 기록이 변경되었습니다.",
+    );
+    await expect(loadActiveSession()).resolves.toEqual(external);
+  });
+
+  it("does not let a stale tab delete a newer active session", async () => {
+    await saveActiveSession(SESSION);
+    const external: SettlementSession = {
+      ...SESSION,
+      id: "newer-session-from-another-tab",
+      createdAt: "2030-01-01T00:10:00.000Z",
+    };
+    const database = await openDB("lightning-split", 1);
+    const revision = Number(await database.get("settlements", "revision-v2"));
+    const transaction = database.transaction("settlements", "readwrite");
+    await transaction.store.put(serializeSession(external), "active-v2");
+    await transaction.store.put(revision + 1, "revision-v2");
+    await transaction.done;
+    database.close();
+
+    await expect(clearActiveSession(SESSION.id)).rejects.toThrow(
+      "다른 탭에서 정산 기록이 변경되었습니다.",
+    );
+    await expect(loadActiveSession()).resolves.toEqual(external);
   });
 
   it("removes legacy UUID verification tokens without deleting the session", async () => {
@@ -123,7 +287,7 @@ describe("local settlement persistence", () => {
       "9b2168e2-f85c-4f69-ae09-7446f4afc4b1";
 
     const database = await openDB("lightning-split", 1);
-    await database.put("settlements", JSON.stringify(legacy), "active");
+    await database.put("settlements", JSON.stringify(legacy), "active-v2");
     database.close();
 
     const restored = await loadActiveSession();
@@ -135,7 +299,7 @@ describe("local settlement persistence", () => {
     });
 
     const inspectionDatabase = await openDB("lightning-split", 1);
-    const migrated = await inspectionDatabase.get("settlements", "active");
+    const migrated = await inspectionDatabase.get("settlements", "active-v2");
     inspectionDatabase.close();
     expect(String(migrated)).not.toContain(
       "9b2168e2-f85c-4f69-ae09-7446f4afc4b1",
@@ -172,9 +336,18 @@ describe("local settlement persistence", () => {
   });
 
   it("requires a sealed verification token while final verification is active", () => {
+    const {
+      settledAt: _settledAt,
+      settlementEvidence: _settlementEvidence,
+      annotation: _annotation,
+      ...unsettledSlot
+    } = SESSION.slots[0]!;
+    void _settledAt;
+    void _settlementEvidence;
+    void _annotation;
     const verifyingExpired: SettlementSession = {
       ...SESSION,
-      slots: [{ ...SESSION.slots[0]!, status: "verifyingExpired" }],
+      slots: [{ ...unsettledSlot, status: "verifyingExpired" }],
     };
     expect(restoreSession(serializeSession(verifyingExpired))).toEqual(
       verifyingExpired,
@@ -187,29 +360,45 @@ describe("local settlement persistence", () => {
     expect(() => restoreSession(JSON.stringify(missingToken))).toThrowError();
   });
 
-  it("stores final verification as backward-compatible v1 pending", async () => {
+  it("stores final verification as recoverable pending state", async () => {
+    const {
+      settledAt: _settledAt,
+      settlementEvidence: _settlementEvidence,
+      annotation: _annotation,
+      ...unsettledSlot
+    } = SESSION.slots[0]!;
+    void _settledAt;
+    void _settlementEvidence;
+    void _annotation;
     const verifyingExpired: SettlementSession = {
       ...SESSION,
-      slots: [{ ...SESSION.slots[0]!, status: "verifyingExpired" }],
+      slots: [{ ...unsettledSlot, status: "verifyingExpired" }],
     };
 
     await saveActiveSession(verifyingExpired);
     const database = await openDB("lightning-split", 1);
-    const stored = String(await database.get("settlements", "active"));
+    const stored = String(await database.get("settlements", "active-v2"));
     database.close();
 
     expect(JSON.parse(stored)).toMatchObject({
-      version: 1,
+      version: 2,
       slots: [{ status: "pending" }],
     });
   });
 
   it("restores a manual confirmation as user-provided state", () => {
+    const {
+      settledAt: _settledAt,
+      settlementEvidence: _settlementEvidence,
+      ...unsettledSlot
+    } = SESSION.slots[0]!;
+    void _settledAt;
+    void _settlementEvidence;
     const manual: SettlementSession = {
       ...SESSION,
       slots: [
         {
-          ...SESSION.slots[0]!,
+          ...unsettledSlot,
           status: "manuallyConfirmed",
           confirmedAt: "2030-01-01T00:05:00.000Z",
         },
@@ -266,9 +455,10 @@ describe("local settlement persistence", () => {
     ]);
   });
 
-  it("restores queued invoices and partial comment delivery", () => {
-    const queued: SettlementSession = {
+  it("migrates legacy queued slots and removes obsolete payment metadata", () => {
+    const queued = {
       ...SESSION,
+      version: 1,
       providerCommentStatus: "partial",
       paymentDescriptionStatus: "partial",
       slots: [
@@ -281,13 +471,24 @@ describe("local settlement persistence", () => {
         },
       ],
     };
-    expect(restoreSession(serializeSession(queued))).toEqual(queued);
+    expect(restoreSession(JSON.stringify(queued))).toMatchObject({
+      providerCommentStatus: "partial",
+      slots: [
+        {
+          status: "failed",
+          failure: { code: "LEGACY_QUEUE_REMOVED", retryable: true },
+        },
+      ],
+    });
+    expect(restoreSession(JSON.stringify(queued))).not.toHaveProperty(
+      "paymentDescriptionStatus",
+    );
   });
 
   it("round-trips bounded historical invoice evidence", () => {
     const historical: SettlementSession = {
       ...SESSION,
-      issuedPaymentHashes: ["11".repeat(32), "22".repeat(32)],
+      issuedPaymentHashes: ["11".repeat(32), "22".repeat(32), "33".repeat(32)],
       invoiceHistory: [
         {
           slotNumber: 1,
@@ -298,19 +499,64 @@ describe("local settlement persistence", () => {
             ...SESSION.slots[0]!.invoice!,
             bolt11: "lnbc-history",
             paymentHash: "22".repeat(32),
-            verificationToken: `v1.${"c".repeat(16)}.${"d".repeat(32)}`,
+            verificationToken: `v2.${"c".repeat(16)}.${"d".repeat(32)}`,
           },
           retiredAt: "2030-01-01T01:05:00.000Z",
           settledAt: "2030-01-01T01:06:00.000Z",
+          settlementEvidence: {
+            kind: "lud21" as const,
+            checkedAt: "2030-01-01T01:06:00.000Z",
+            preimagePresent: true as const,
+            providerStatus: "PAID",
+          },
+        },
+        {
+          slotNumber: 1,
+          krwShare: "21500",
+          targetSats: "13438",
+          attempt: 3,
+          invoice: {
+            ...SESSION.slots[0]!.invoice!,
+            bolt11: "lnbc-manual-history",
+            paymentHash: "33".repeat(32),
+            verificationToken: `v2.${"e".repeat(16)}.${"f".repeat(32)}`,
+          },
+          retiredAt: "2030-01-01T02:05:00.000Z",
+          confirmedAt: "2030-01-01T02:06:00.000Z",
         },
       ],
     };
     expect(restoreSession(serializeSession(historical))).toEqual(historical);
+
+    const mixedEvidence = JSON.parse(serializeSession(historical)) as {
+      invoiceHistory: Array<{
+        settledAt?: string;
+        settlementEvidence?: {
+          kind: string;
+          checkedAt: string;
+          preimagePresent: boolean;
+        };
+      }>;
+    };
+    mixedEvidence.invoiceHistory[1]!.settledAt = "2030-01-01T02:07:00.000Z";
+    mixedEvidence.invoiceHistory[1]!.settlementEvidence = {
+      kind: "lud21",
+      checkedAt: "2030-01-01T02:07:00.000Z",
+      preimagePresent: true,
+    };
+    expect(() => restoreSession(JSON.stringify(mixedEvidence))).toThrowError();
   });
 
   it("treats a persisted awaiting invoice as display-ready after recovery", () => {
-    const { settledAt: _settledAt, ...pendingSlot } = SESSION.slots[0]!;
+    const {
+      settledAt: _settledAt,
+      settlementEvidence: _settlementEvidence,
+      annotation: _annotation,
+      ...pendingSlot
+    } = SESSION.slots[0]!;
     void _settledAt;
+    void _settlementEvidence;
+    void _annotation;
     const awaiting: SettlementSession = {
       ...SESSION,
       slots: [

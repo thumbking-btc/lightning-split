@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { ApiClientError, fetchSettlement } from "./api";
 import {
+  HISTORICAL_POLLING_INTERVAL_MS,
   nextPollingDelay,
   settlementIdentityKey,
   settlementPollingTargets,
@@ -68,7 +69,13 @@ export function useSettlementPolling(
             });
             if (cancelled) return;
             failures.set(key, 0);
-            nextDue.set(key, Date.now() + nextPollingDelay(0));
+            nextDue.set(
+              key,
+              Date.now() +
+                (Date.parse(invoice.expiresAt) <= Date.now()
+                  ? HISTORICAL_POLLING_INTERVAL_MS
+                  : nextPollingDelay(0)),
+            );
             updateSession((value) =>
               transitionAfterSettlementCheck(
                 value,

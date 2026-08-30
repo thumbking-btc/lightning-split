@@ -12,7 +12,7 @@ import {
 
 function pendingSession(expiresAt: string): SettlementSession {
   return {
-    version: 1,
+    version: 2,
     id: "session",
     inputMode: "sats",
     totalAmount: "1000",
@@ -37,7 +37,7 @@ function pendingSession(expiresAt: string): SettlementSession {
           payeeNodeId: `02${"11".repeat(32)}`,
           featureBits: [],
           providerDomain: "wallet.example",
-          verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+          verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
         },
       },
     ],
@@ -56,10 +56,19 @@ describe("settlement polling transitions", () => {
         status: "settled",
         settled: true,
         checkedAt: "2030-01-01T00:01:00.000Z",
+        preimagePresent: true,
+        providerStatus: null,
       },
       new Date("2030-01-01T00:01:00.000Z"),
     );
-    expect(transitioned.slots[0]?.status).toBe("settled");
+    expect(transitioned.slots[0]).toMatchObject({
+      status: "settled",
+      settlementEvidence: {
+        kind: "lud21",
+        checkedAt: "2030-01-01T00:01:00.000Z",
+        preimagePresent: true,
+      },
+    });
     expect(
       isSlotPollable(
         transitioned.slots[0]!,
@@ -74,7 +83,14 @@ describe("settlement polling transitions", () => {
     const transitioned = transitionAfterSettlementCheck(
       session,
       identity,
-      { ok: true, status: "unsettled", settled: false },
+      {
+        ok: true,
+        status: "unsettled",
+        settled: false,
+        checkedAt: "2030-01-01T00:00:30.000Z",
+        preimagePresent: false,
+        providerStatus: null,
+      },
       new Date("2030-01-01T00:00:30.000Z"),
     );
     expect(transitioned.slots[0]?.status).toBe("verifyingExpired");
@@ -87,7 +103,14 @@ describe("settlement polling transitions", () => {
     const expired = transitionAfterSettlementCheck(
       transitioned,
       identity,
-      { ok: true, status: "unsettled", settled: false },
+      {
+        ok: true,
+        status: "unsettled",
+        settled: false,
+        checkedAt: "2030-01-01T00:01:00.000Z",
+        preimagePresent: false,
+        providerStatus: null,
+      },
       new Date("2030-01-01T00:01:00.000Z"),
     );
     expect(expired.slots[0]?.status).toBe("expired");
@@ -96,6 +119,9 @@ describe("settlement polling transitions", () => {
     );
     expect(
       isSlotPollable(expired.slots[0]!, Date.parse("2030-01-01T00:01:00.000Z")),
+    ).toBe(true);
+    expect(
+      isSlotPollable(expired.slots[0]!, Date.parse("2030-01-09T00:00:00.000Z")),
     ).toBe(false);
   });
 
@@ -111,7 +137,7 @@ describe("settlement polling transitions", () => {
           invoice: {
             ...original.slots[0]!.invoice!,
             paymentHash: "22".repeat(32),
-            verificationToken: `v1.${"c".repeat(16)}.${"d".repeat(32)}`,
+            verificationToken: `v2.${"c".repeat(16)}.${"d".repeat(32)}`,
           },
         },
       ],
@@ -119,7 +145,14 @@ describe("settlement polling transitions", () => {
     const result = transitionAfterSettlementCheck(
       replacement,
       identity,
-      { ok: true, status: "settled", settled: true },
+      {
+        ok: true,
+        status: "settled",
+        settled: true,
+        checkedAt: "2030-01-01T00:01:00.000Z",
+        preimagePresent: true,
+        providerStatus: null,
+      },
       new Date("2030-01-01T00:01:00.000Z"),
     );
     expect(result).toBe(replacement);
@@ -189,12 +222,19 @@ describe("settlement polling transitions", () => {
         status: "settled",
         settled: true,
         checkedAt: "2030-01-02T00:00:01.000Z",
+        preimagePresent: true,
+        providerStatus: null,
       },
       new Date("2030-01-02T00:00:01.000Z"),
     );
     expect(settled.slots[0]).toMatchObject({
       status: "settled",
       settledAt: "2030-01-02T00:00:01.000Z",
+      settlementEvidence: {
+        kind: "lud21",
+        checkedAt: "2030-01-02T00:00:01.000Z",
+        preimagePresent: true,
+      },
     });
 
     const unavailable = transitionAfterSettlementCheck(

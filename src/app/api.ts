@@ -2,7 +2,6 @@ import type {
   ApiErrorDto,
   BatchInvoiceRequestDto,
   BatchInvoiceResponseDto,
-  DeferredInvoiceSlotDto,
   FailedInvoiceSlotDto,
   PendingInvoiceSlotDto,
   PriceResponseDto,
@@ -14,7 +13,6 @@ import {
 } from "../api/serialization";
 import { isRecord } from "../infrastructure/validation";
 import { MAX_BOLT11_LENGTH } from "../lightning/bolt11";
-import { buildQrPayload } from "./qr";
 
 export class ApiClientError extends Error {
   constructor(
@@ -29,10 +27,19 @@ export class ApiClientError extends Error {
 }
 
 const SEALED_VERIFICATION_TOKEN =
-  /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
+  /^v2\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 
 async function parseApiResponse(response: Response): Promise<unknown> {
-  const value: unknown = await response.json();
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도하십시오.",
+      response.status >= 500,
+    );
+  }
   if (!response.ok) {
     if (isRecord(value) && value.ok === false && isRecord(value.error)) {
       throw new ApiClientError(
@@ -105,20 +112,6 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
     SEALED_VERIFICATION_TOKEN.test(value.invoice.verificationToken)
       ? value.invoice.verificationToken
       : undefined;
-  let paymentRequest: string | undefined;
-  if (
-    typeof value.invoice.paymentRequest === "string" &&
-    value.invoice.paymentRequest.length >= 1 &&
-    value.invoice.paymentRequest.length <= 2_300
-  ) {
-    try {
-      buildQrPayload(value.invoice.paymentRequest, value.invoice.bolt11);
-      paymentRequest = value.invoice.paymentRequest;
-    } catch {
-      // Optional richer payment data from a mixed-version Worker must never
-      // hide the canonical BOLT11 invoice.
-    }
-  }
   return {
     status: "pending",
     slotNumber: value.slotNumber,
@@ -138,39 +131,7 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
         ? { disposable: value.invoice.disposable }
         : {}),
       ...(verificationToken === undefined ? {} : { verificationToken }),
-      ...(paymentRequest === undefined ? {} : { paymentRequest }),
     },
-  };
-}
-
-function assertDeferredSlot(value: unknown): DeferredInvoiceSlotDto {
-  if (
-    !isRecord(value) ||
-    value.status !== "deferred" ||
-    typeof value.slotNumber !== "number" ||
-    !Number.isSafeInteger(value.slotNumber) ||
-    Number(value.slotNumber) < 1 ||
-    typeof value.targetSats !== "string" ||
-    !/^[1-9]\d*$/u.test(value.targetSats) ||
-    typeof value.attempt !== "number" ||
-    !Number.isSafeInteger(value.attempt) ||
-    Number(value.attempt) < 1 ||
-    (value.krwShare !== undefined &&
-      (typeof value.krwShare !== "string" ||
-        !/^[1-9]\d*$/u.test(value.krwShare)))
-  ) {
-    throw new ApiClientError(
-      "INVALID_RESPONSE",
-      "대기 응답 형식이 올바르지 않습니다.",
-      false,
-    );
-  }
-  return {
-    status: "deferred",
-    slotNumber: value.slotNumber,
-    targetSats: value.targetSats,
-    attempt: value.attempt,
-    ...(typeof value.krwShare === "string" ? { krwShare: value.krwShare } : {}),
   };
 }
 
@@ -263,19 +224,34 @@ export async function fetchPriceInformation(): Promise<PriceResponseDto> {
 export async function requestInvoiceBatch(
   input: BatchInvoiceRequestDto,
 ): Promise<BatchInvoiceResponseDto> {
-  const value = await parseApiResponse(
-    await fetch("/api/invoices", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...input,
-        capabilities: { deferredSlots: true },
-      }),
-    }),
-  );
+  let value: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      value = await parseApiResponse(
+        await fetch("/api/invoices", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(input),
+        }),
+      );
+      break;
+    } catch (cause) {
+      const canReplay =
+        input.requestId !== undefined &&
+        (!(cause instanceof ApiClientError) ||
+          ["TIMEOUT", "NETWORK_ERROR", "HTTP_ERROR"].includes(cause.code));
+      if (attempt === 0 && canReplay) continue;
+      if (cause instanceof ApiClientError) throw cause;
+      throw new ApiClientError(
+        "NETWORK_ERROR",
+        "서버에 연결하지 못했습니다. 잠시 후 다시 시도하십시오.",
+        true,
+      );
+    }
+  }
   if (
     !isRecord(value) ||
     value.ok !== true ||
@@ -302,9 +278,7 @@ export async function requestInvoiceBatch(
   const parsedSlots = value.slots.map((slot) =>
     isRecord(slot) && slot.status === "pending"
       ? assertPendingSlot(slot)
-      : isRecord(slot) && slot.status === "deferred"
-        ? assertDeferredSlot(slot)
-        : assertFailedSlot(slot),
+      : assertFailedSlot(slot),
   );
   if (parsedSlots.length !== input.slots.length) {
     throw new ApiClientError(
@@ -351,10 +325,8 @@ export async function requestInvoiceBatch(
       pending.length ||
     new Set(pending.map((slot) => slot.invoice.bolt11)).size !==
       pending.length ||
-    pending.some(
-      (slot) =>
-        input.excludedPaymentHashes?.includes(slot.invoice.paymentHash) ||
-        input.excludedInvoices?.includes(slot.invoice.bolt11),
+    pending.some((slot) =>
+      input.excludedPaymentHashes?.includes(slot.invoice.paymentHash),
     )
   ) {
     throw new ApiClientError(
@@ -373,17 +345,6 @@ export async function requestInvoiceBatch(
       provider.commentStatus === "partial"
         ? { commentStatus: provider.commentStatus }
         : {}),
-      ...(provider.descriptionStatus === "embedded" ||
-      provider.descriptionStatus === "notEmbedded" ||
-      provider.descriptionStatus === "partial"
-        ? { descriptionStatus: provider.descriptionStatus }
-        : {}),
-      automaticSettlementAvailable:
-        typeof provider.automaticSettlementAvailable === "boolean"
-          ? provider.automaticSettlementAvailable
-          : pending.some(
-              (slot) => slot.invoice.verificationToken !== undefined,
-            ),
     },
     slots,
     completedCount: value.completedCount,
@@ -413,16 +374,7 @@ export async function fetchSettlement(input: {
       String(value.status),
     ) ||
     typeof value.settled !== "boolean" ||
-    (value.status === "settled") !== value.settled ||
-    (value.checkedAt !== undefined &&
-      (typeof value.checkedAt !== "string" ||
-        !Number.isFinite(Date.parse(value.checkedAt)))) ||
-    (value.preimagePresent !== undefined &&
-      typeof value.preimagePresent !== "boolean") ||
-    (value.providerStatus !== undefined &&
-      value.providerStatus !== null &&
-      (typeof value.providerStatus !== "string" ||
-        value.providerStatus.length > 128))
+    (value.status === "settled") !== value.settled
   ) {
     throw new ApiClientError(
       "INVALID_RESPONSE",
@@ -437,21 +389,51 @@ export async function fetchSettlement(input: {
     value.status === "notAvailable"
       ? value.status
       : "notAvailable";
-  return {
-    ok: true,
-    status,
-    settled: value.settled,
-    ...(typeof value.checkedAt === "string"
-      ? { checkedAt: value.checkedAt }
-      : {}),
-    ...(typeof value.preimagePresent === "boolean"
-      ? { preimagePresent: value.preimagePresent }
-      : {}),
-    ...(typeof value.providerStatus === "string" ||
-    value.providerStatus === null
-      ? { providerStatus: value.providerStatus }
-      : {}),
-  };
+  if (status === "settled" || status === "unsettled") {
+    if (
+      typeof value.checkedAt !== "string" ||
+      !Number.isFinite(Date.parse(value.checkedAt)) ||
+      value.preimagePresent !== (status === "settled") ||
+      (value.providerStatus !== null &&
+        (typeof value.providerStatus !== "string" ||
+          value.providerStatus.length > 128))
+    ) {
+      throw new ApiClientError(
+        "INVALID_RESPONSE",
+        "결제 확인 근거가 누락되었거나 올바르지 않습니다.",
+        false,
+      );
+    }
+    return status === "settled"
+      ? {
+          ok: true,
+          status,
+          settled: true,
+          checkedAt: value.checkedAt,
+          preimagePresent: true,
+          providerStatus: value.providerStatus,
+        }
+      : {
+          ok: true,
+          status,
+          settled: false,
+          checkedAt: value.checkedAt,
+          preimagePresent: false,
+          providerStatus: value.providerStatus,
+        };
+  }
+  if (
+    value.checkedAt !== undefined ||
+    value.preimagePresent !== undefined ||
+    value.providerStatus !== undefined
+  ) {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "결제 확인 응답 형식이 올바르지 않습니다.",
+      false,
+    );
+  }
+  return { ok: true, status, settled: false };
 }
 
 export type { ApiErrorDto };

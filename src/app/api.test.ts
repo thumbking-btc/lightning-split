@@ -4,6 +4,7 @@ import type { BatchInvoiceRequestDto } from "../api/contracts";
 import { ApiClientError, fetchSettlement, requestInvoiceBatch } from "./api";
 
 const request: BatchInvoiceRequestDto = {
+  requestId: "session-1",
   address: "user@wallet.example",
   slots: [
     { slotNumber: 1, targetSats: "1000", attempt: 1 },
@@ -60,7 +61,7 @@ function response(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("invoice API response correlation", () => {
-  it("correlates reordered slots and derives an omitted optional capability", async () => {
+  it("correlates reordered slots", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -70,7 +71,6 @@ describe("invoice API response correlation", () => {
 
     const result = await requestInvoiceBatch(request);
     expect(result.slots.map((slot) => slot.slotNumber)).toEqual([1, 2]);
-    expect(result.provider.automaticSettlementAvailable).toBe(false);
   });
 
   it.each([
@@ -108,6 +108,7 @@ describe("invoice API response correlation", () => {
     );
     await expect(
       requestInvoiceBatch({
+        requestId: "excluded-retry",
         address: request.address,
         slots: [request.slots[0]!],
         excludedPaymentHashes: [excluded.invoice.paymentHash],
@@ -115,7 +116,7 @@ describe("invoice API response correlation", () => {
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
-  it("drops malformed optional payment capabilities but keeps canonical BOLT11 payable", async () => {
+  it("drops unknown legacy payment fields but keeps canonical BOLT11 payable", async () => {
     const slot = pendingSlot(1, "1000", 1);
     vi.stubGlobal(
       "fetch",
@@ -135,6 +136,7 @@ describe("invoice API response correlation", () => {
     );
 
     const result = await requestInvoiceBatch({
+      requestId: "legacy-fields",
       address: request.address,
       slots: [request.slots[0]!],
     });
@@ -144,8 +146,36 @@ describe("invoice API response correlation", () => {
     });
     if (result.slots[0]?.status !== "pending") throw new Error("pending");
     expect(result.slots[0].invoice.verificationToken).toBeUndefined();
-    expect(result.slots[0].invoice.paymentRequest).toBeUndefined();
     expect(result.slots[0].invoice.disposable).toBeUndefined();
+  });
+
+  it("replays an idempotent request once after a network failure", async () => {
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("connection reset"))
+      .mockResolvedValueOnce(
+        response([pendingSlot(1, "1000", 1), pendingSlot(2, "1001", 2)]),
+      );
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(requestInvoiceBatch(request)).resolves.toMatchObject({
+      completedCount: 2,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
+      fetcher.mock.calls[1]?.[1]?.body,
+    );
+  });
+
+  it("turns malformed JSON into a stable user-facing API error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not-json", { status: 502 })),
+    );
+    await expect(requestInvoiceBatch(request)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      message: "서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도하십시오.",
+    });
   });
 
   it("rejects contradictory or malformed settlement state", async () => {
@@ -158,6 +188,27 @@ describe("invoice API response correlation", () => {
         settled: true,
         checkedAt: "not-a-date",
       },
+      {
+        ok: true,
+        status: "settled",
+        settled: true,
+        checkedAt: "2030-01-01T00:00:00.000Z",
+        providerStatus: "OK",
+      },
+      {
+        ok: true,
+        status: "settled",
+        settled: true,
+        checkedAt: "2030-01-01T00:00:00.000Z",
+        preimagePresent: false,
+        providerStatus: "OK",
+      },
+      {
+        ok: true,
+        status: "expired",
+        settled: false,
+        preimagePresent: false,
+      },
     ];
     for (const value of cases) {
       vi.stubGlobal(
@@ -166,7 +217,7 @@ describe("invoice API response correlation", () => {
       );
       await expect(
         fetchSettlement({
-          verificationToken: `v1.${"a".repeat(16)}.${"b".repeat(32)}`,
+          verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
           paymentHash: "11".repeat(32),
           bolt11: "lnbc1test",
         }),

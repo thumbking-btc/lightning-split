@@ -3,8 +3,6 @@ export interface LocalIdCryptoSource {
   readonly getRandomValues?: (values: Uint8Array) => Uint8Array;
 }
 
-let fallbackSequence = 0;
-
 function currentCrypto(): LocalIdCryptoSource | undefined {
   return typeof globalThis.crypto === "object"
     ? (globalThis.crypto as LocalIdCryptoSource)
@@ -18,8 +16,6 @@ function formatUuid(bytes: Uint8Array): string {
 
 export function createLocalSettlementId(
   source: LocalIdCryptoSource | null | undefined = currentCrypto(),
-  nowMs = Date.now(),
-  random = Math.random,
 ): string {
   if (typeof source?.randomUUID === "function") {
     return source.randomUUID();
@@ -31,9 +27,7 @@ export function createLocalSettlementId(
     return formatUuid(bytes);
   }
 
-  // This ID only distinguishes local UI sessions. It is never an
-  // authentication token or a payment identifier.
-  fallbackSequence = (fallbackSequence + 1) % Number.MAX_SAFE_INTEGER;
-  const randomPart = Math.floor(random() * 0x1_0000_0000).toString(36);
-  return `local-${nowMs.toString(36)}-${fallbackSequence.toString(36)}-${randomPart}`;
+  // This ID is also the Durable Object idempotency key. A weak fallback can
+  // collide across tabs or be preempted, so invoice issuance must stop.
+  throw new Error("이 브라우저는 안전한 정산 식별자 생성을 지원하지 않습니다.");
 }
