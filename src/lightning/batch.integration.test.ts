@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { InfrastructureError } from "../infrastructure/errors";
 import { createTestBolt11 } from "../test/bolt11-fixture";
 import { generateInvoiceBatch, type InvoiceSlotRequest } from "./batch";
-import type { LnurlPayDiscovery, LnurlPayClient } from "./lnurl";
+import type {
+  InvoiceRequestOptions,
+  LnurlPayDiscovery,
+  LnurlPayClient,
+} from "./lnurl";
 
 const NOW_SECONDS = 1_900_000_100;
 const DISCOVERY: LnurlPayDiscovery = {
@@ -34,13 +38,15 @@ function clientWith(
   requestInvoice: (
     discovery: LnurlPayDiscovery,
     amountSats: bigint,
+    options?: InvoiceRequestOptions,
   ) => Promise<{ invoice: string; verifyUrl?: string }>,
+  discovery: LnurlPayDiscovery = DISCOVERY,
 ): {
   readonly client: Pick<LnurlPayClient, "discover" | "requestInvoice">;
   readonly discover: ReturnType<typeof vi.fn>;
   readonly callback: ReturnType<typeof vi.fn>;
 } {
-  const discover = vi.fn(() => Promise.resolve(DISCOVERY));
+  const discover = vi.fn(() => Promise.resolve(discovery));
   const callback = vi.fn(requestInvoice);
   return { client: { discover, requestInvoice: callback }, discover, callback };
 }
@@ -81,6 +87,83 @@ describe("sequential invoice batch generation", () => {
     );
     expect(pending[0]?.settlementCheck.status).toBe("notChecked");
     expect(pending[1]?.settlementCheck.status).toBe("notAvailable");
+  });
+
+  it("forwards the same settlement note to every callback when supported", async () => {
+    let call = 0;
+    const mock = clientWith(
+      (_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: `comment-${++call}`,
+          }).invoice,
+        }),
+      { ...DISCOVERY, commentAllowed: 255 },
+    );
+
+    await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(3),
+        providerComment: "8/30 고깃집 저녁",
+      },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+
+    expect(mock.callback).toHaveBeenCalledTimes(3);
+    for (const callbackCall of mock.callback.mock.calls) {
+      expect(callbackCall[2]).toEqual({ comment: "8/30 고깃집 저녁" });
+    }
+  });
+
+  it("continues without a provider comment when comments are unsupported", async () => {
+    const mock = clientWith((_discovery, amountSats) =>
+      Promise.resolve({
+        invoice: createTestBolt11({
+          amountSats,
+          fixtureId: `unsupported-${amountSats}`,
+        }).invoice,
+      }),
+    );
+
+    const result = await generateInvoiceBatch(
+      {
+        address: "user@wallet.example",
+        slots: slots(2),
+        providerComment: "8/30 고깃집 저녁",
+      },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+
+    expect(result.completedCount).toBe(2);
+    expect(mock.callback).toHaveBeenCalledTimes(2);
+    expect(mock.callback.mock.calls[0]?.[2]).toEqual({});
+  });
+
+  it("rejects an overlong provider comment before requesting any callback", async () => {
+    const mock = clientWith(
+      (_discovery, amountSats) =>
+        Promise.resolve({
+          invoice: createTestBolt11({
+            amountSats,
+            fixtureId: "comment-too-long",
+          }).invoice,
+        }),
+      { ...DISCOVERY, commentAllowed: 5 },
+    );
+
+    await expect(
+      generateInvoiceBatch(
+        {
+          address: "user@wallet.example",
+          slots: slots(1),
+          providerComment: "123456",
+        },
+        { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+      ),
+    ).rejects.toMatchObject({ code: "COMMENT_TOO_LONG" });
+    expect(mock.callback).not.toHaveBeenCalled();
   });
 
   it("keeps successful slots and continues after an ordinary provider failure", async () => {

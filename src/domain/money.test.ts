@@ -7,7 +7,6 @@ import {
   createSatsSplitPlan,
   krwToSats,
   splitKrw,
-  splitSats,
   sumAmounts,
 } from "./money";
 
@@ -92,34 +91,29 @@ describe("KRW distribution without an excluded payer", () => {
 });
 
 describe("sats direct-input distribution", () => {
-  it("splits 50,003 sats across five invoices", () => {
-    expect(splitSats(50_003n, 5)).toEqual([
-      10_001n,
-      10_001n,
-      10_001n,
-      10_000n,
-      10_000n,
-    ]);
+  it("treats 3,002 sats as the group total and makes the payer absorb the remainder", () => {
+    const plan = createSatsSplitPlan(3_002n, 3, true);
+
+    expect(plan.invoiceCount).toBe(2);
+    expect(plan.invoiceShares).toEqual([1_000n, 1_000n]);
+    expect(plan.payerShareSats).toBe(1_002n);
+    expect(sumAmounts(plan.invoiceShares)).toBe(2_000n);
+    expect(sumAmounts(plan.invoiceShares) + (plan.payerShareSats ?? 0n)).toBe(
+      3_002n,
+    );
   });
 
-  it("splits a divisible amount", () => {
-    expect(splitSats(12n, 3)).toEqual([4n, 4n, 4n]);
-  });
-
-  it("distributes a one sat remainder to the first invoice", () => {
-    expect(splitSats(10n, 3)).toEqual([4n, 3n, 3n]);
-  });
-
-  it("preserves the entered total across payer-excluded invoice targets", () => {
+  it("makes four sender invoices equal for a 50,003 sat group total", () => {
     const plan = createSatsSplitPlan(50_003n, 5, true);
 
     expect(plan.invoiceCount).toBe(4);
-    expect(plan.invoiceShares).toEqual([12_501n, 12_501n, 12_501n, 12_500n]);
-    expect(sumAmounts(plan.invoiceShares)).toBe(50_003n);
-    expect(plan.totalSats).toBe(50_003n);
+    expect(plan.invoiceShares).toEqual([10_000n, 10_000n, 10_000n, 10_000n]);
+    expect(plan.payerShareSats).toBe(10_003n);
+    expect(sumAmounts(plan.invoiceShares)).toBe(40_000n);
+    expect(plan.groupTotalSats).toBe(50_003n);
   });
 
-  it("uses all people as invoice targets when the payer is not excluded", () => {
+  it("preserves the group total across all people when the payer is not excluded", () => {
     const plan = createSatsSplitPlan(50_003n, 5, false);
 
     expect(plan.invoiceCount).toBe(5);
@@ -131,19 +125,26 @@ describe("sats direct-input distribution", () => {
       10_000n,
     ]);
     expect(sumAmounts(plan.invoiceShares)).toBe(50_003n);
+    expect(plan.payerShareSats).toBeNull();
   });
 
-  it("supports one invoice when two people exclude the payer", () => {
-    const plan = createSatsSplitPlan(1n, 2, true);
+  it("handles exactly divisible totals with the payer excluded", () => {
+    const plan = createSatsSplitPlan(3_000n, 3, true);
 
-    expect(plan.invoiceCount).toBe(1);
-    expect(plan.invoiceShares).toEqual([1n]);
+    expect(plan.invoiceShares).toEqual([1_000n, 1_000n]);
+    expect(plan.payerShareSats).toBe(1_000n);
   });
 
-  it("preserves the total across representative invoice counts", () => {
-    for (let invoiceCount = 1; invoiceCount <= 10; invoiceCount += 1) {
-      for (let total = BigInt(invoiceCount); total <= 500n; total += 1n) {
-        expect(sumAmounts(splitSats(total, invoiceCount))).toBe(total);
+  it("preserves every group total for both payer modes", () => {
+    for (let people = 2; people <= 10; people += 1) {
+      for (let total = BigInt(people); total <= 500n; total += 1n) {
+        const excluded = createSatsSplitPlan(total, people, true);
+        const included = createSatsSplitPlan(total, people, false);
+
+        expect(
+          sumAmounts(excluded.invoiceShares) + (excluded.payerShareSats ?? 0n),
+        ).toBe(total);
+        expect(sumAmounts(included.invoiceShares)).toBe(total);
       }
     }
   });
@@ -203,7 +204,9 @@ describe("input validation", () => {
   });
 
   it.each([0n, -1n])("rejects invalid sats totals: %s", (total) => {
-    expect(() => splitSats(total, 2)).toThrowError(MoneyValidationError);
+    expect(() => createSatsSplitPlan(total, 2, true)).toThrowError(
+      MoneyValidationError,
+    );
   });
 
   it("rejects KRW totals whose sender invoice shares would be zero", () => {
@@ -213,7 +216,7 @@ describe("input validation", () => {
   });
 
   it("rejects sats totals that cannot provide one sat per invoice", () => {
-    expect(() => splitSats(1n, 2)).toThrowError(
+    expect(() => createSatsSplitPlan(1n, 2, true)).toThrowError(
       expect.objectContaining({ code: "ZERO_INVOICE_TARGET" }),
     );
   });
@@ -246,7 +249,7 @@ describe("input validation", () => {
 
   it("rejects BigInt input beyond the approved safe input boundary", () => {
     expect(() =>
-      splitSats(BigInt(Number.MAX_SAFE_INTEGER) + 1n, 2),
+      createSatsSplitPlan(BigInt(Number.MAX_SAFE_INTEGER) + 1n, 2, true),
     ).toThrowError(expect.objectContaining({ code: "UNSAFE_AMOUNT" }));
   });
 });

@@ -20,6 +20,8 @@ const SESSION: SettlementSession = {
   excludePayer: true,
   invoiceCount: 1,
   lightningAddress: "user@wallet.example",
+  overallNote: "8/30 고깃집 저녁",
+  providerCommentStatus: "forwarded",
   participantNameCandidates: ["민수", "철수"],
   createdAt: "2030-01-01T00:00:00.000Z",
   issuedPaymentHashes: ["11".repeat(32)],
@@ -87,5 +89,35 @@ describe("local settlement persistence", () => {
       confirmedAt: "2030-01-01T00:05:00.000Z",
       annotation: { displayName: "철수" },
     });
+  });
+
+  it("restores the sats payer share without treating it as an invoice", () => {
+    const satsSession: SettlementSession = {
+      ...SESSION,
+      inputMode: "sats",
+      totalAmount: "3002",
+      totalPeople: 3,
+      invoiceCount: 2,
+      payerShareSats: "1002",
+      slots: [
+        { ...SESSION.slots[0]!, slotNumber: 1, targetSats: "1000" },
+        {
+          ...SESSION.slots[0]!,
+          slotNumber: 2,
+          targetSats: "1000",
+          invoice: {
+            ...SESSION.slots[0]!.invoice!,
+            paymentHash: "22".repeat(32),
+          },
+        },
+      ],
+    };
+
+    const restored = restoreSession(serializeSession(satsSession));
+    expect(restored.payerShareSats).toBe("1002");
+    expect(restored.slots.map((slot) => slot.targetSats)).toEqual([
+      "1000",
+      "1000",
+    ]);
   });
 });

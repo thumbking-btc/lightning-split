@@ -19,6 +19,7 @@ export interface LightningPolicy {
   readonly settlementHttp: HttpFetchPolicy;
   readonly minimumInvoiceRemainingSeconds: number;
   readonly maximumBatchSize: number;
+  readonly maximumProviderCommentCharacters: number;
 }
 
 export interface ApiRateLimitPolicy {
@@ -61,6 +62,7 @@ export const DEFAULT_LIGHTNING_POLICY: Readonly<LightningPolicy> =
     }),
     minimumInvoiceRemainingSeconds: 120,
     maximumBatchSize: 10,
+    maximumProviderCommentCharacters: 255,
   });
 
 // The actual request limits live in wrangler.jsonc because Cloudflare enforces

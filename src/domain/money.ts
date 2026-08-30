@@ -5,7 +5,6 @@ const MAX_SAFE_AMOUNT = BigInt(Number.MAX_SAFE_INTEGER);
 
 export type MoneyValidationCode =
   | "INVALID_PEOPLE_COUNT"
-  | "INVALID_INVOICE_COUNT"
   | "INVALID_AMOUNT"
   | "UNSAFE_AMOUNT"
   | "INVALID_PRICE"
@@ -32,7 +31,8 @@ export interface KrwSplitPlan extends EqualSplitPlan {
 }
 
 export interface SatsSplitPlan extends EqualSplitPlan {
-  readonly totalSats: bigint;
+  readonly groupTotalSats: bigint;
+  readonly payerShareSats: bigint | null;
 }
 
 export interface KrwPayerExcludedSplit {
@@ -49,19 +49,6 @@ function assertPeopleCount(people: number): void {
     throw new MoneyValidationError(
       "INVALID_PEOPLE_COUNT",
       `People must be an integer between ${MIN_PEOPLE} and ${MAX_PEOPLE}.`,
-    );
-  }
-}
-
-function assertInvoiceCount(invoiceCount: number): void {
-  if (
-    !Number.isSafeInteger(invoiceCount) ||
-    invoiceCount < 1 ||
-    invoiceCount > MAX_PEOPLE
-  ) {
-    throw new MoneyValidationError(
-      "INVALID_INVOICE_COUNT",
-      `Invoice count must be an integer between 1 and ${MAX_PEOPLE}.`,
     );
   }
 }
@@ -140,19 +127,6 @@ export function splitKrw(
   };
 }
 
-export function splitSats(
-  totalSats: bigint,
-  invoiceCount: number,
-): readonly bigint[] {
-  assertInvoiceCount(invoiceCount);
-  assertPositiveSafeAmount(totalSats, "amount");
-
-  const invoiceShares = splitEvenly(totalSats, invoiceCount);
-  assertPositiveInvoiceShares(invoiceShares);
-
-  return invoiceShares;
-}
-
 export function krwToSats(krw: bigint, btcPriceKrw: bigint): bigint {
   assertPositiveSafeAmount(krw, "amount");
   assertPositiveSafeAmount(btcPriceKrw, "price");
@@ -208,13 +182,21 @@ export function createSatsSplitPlan(
   excludePayer: boolean,
 ): SatsSplitPlan {
   assertPeopleCount(people);
-  const invoiceCount = excludePayer ? people - 1 : people;
-  const invoiceShares = splitSats(totalSats, invoiceCount);
+  assertPositiveSafeAmount(totalSats, "amount");
+
+  const divisor = BigInt(people);
+  const equalShareSats = totalSats / divisor;
+  const remainderSats = totalSats % divisor;
+  const invoiceShares = excludePayer
+    ? Array.from({ length: people - 1 }, () => equalShareSats)
+    : splitEvenly(totalSats, people);
+  assertPositiveInvoiceShares(invoiceShares);
 
   return {
     invoiceShares,
-    invoiceCount,
-    totalSats,
+    invoiceCount: invoiceShares.length,
+    groupTotalSats: totalSats,
+    payerShareSats: excludePayer ? equalShareSats + remainderSats : null,
   };
 }
 

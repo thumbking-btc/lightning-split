@@ -1,5 +1,9 @@
 import type { PriceSnapshotDto } from "../api/serialization";
-import type { InputMode, PaymentAnnotation } from "../domain/models";
+import type {
+  InputMode,
+  PaymentAnnotation,
+  ProviderCommentStatus,
+} from "../domain/models";
 
 export type ClientSlotStatus =
   | "generating"
@@ -51,6 +55,8 @@ export interface SettlementSession {
   readonly participantNameCandidates: readonly string[];
   readonly priceSnapshot?: PriceSnapshotDto;
   readonly payerShareKrw?: string;
+  readonly payerShareSats?: string;
+  readonly providerCommentStatus?: ProviderCommentStatus;
   readonly createdAt: string;
   readonly providerDomain?: string;
   readonly issuedPaymentHashes?: readonly string[];

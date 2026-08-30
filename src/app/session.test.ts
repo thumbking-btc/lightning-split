@@ -6,6 +6,7 @@ import {
 } from "../api/serialization";
 import {
   annotateSettledSlot,
+  applyBatchResponse,
   applySlotRetryResponse,
   collectIssuedPaymentHashes,
   createGeneratingSession,
@@ -43,26 +44,91 @@ describe("mobile settlement session", () => {
     expect(preview.targetSats).toEqual([21_500n, 21_500n, 21_500n]);
   });
 
-  it("supports sats mode while preserving the total across invoice targets", () => {
+  it("treats the sats input as the group total and excludes the payer share", () => {
     const preview = createSettlementPreview({
       inputMode: "sats",
       totalAmount: "50003",
-      totalPeople: 6,
+      totalPeople: 5,
       excludePayer: true,
       lightningAddress: "user@wallet.example",
       participantNameCandidates: [],
     });
-    expect(preview.targetSats).toEqual([
-      10_001n,
-      10_001n,
-      10_001n,
-      10_000n,
-      10_000n,
-    ]);
+    expect(preview.targetSats).toEqual([10_000n, 10_000n, 10_000n, 10_000n]);
+    expect(preview.payerShareSats).toBe(10_003n);
     expect(preview.targetSats.reduce((sum, amount) => sum + amount, 0n)).toBe(
-      50_003n,
+      40_000n,
     );
   });
+
+  it("stores the sats payer share separately from anonymous invoice slots", () => {
+    const draft: DraftInput = {
+      inputMode: "sats",
+      totalAmount: "3002",
+      totalPeople: 3,
+      excludePayer: true,
+      lightningAddress: "user@wallet.example",
+      participantNameCandidates: [],
+    };
+    const session = createGeneratingSession(
+      draft,
+      createSettlementPreview(draft),
+      undefined,
+    );
+
+    expect(session.payerShareSats).toBe("1002");
+    expect(session.slots.map((slot) => slot.targetSats)).toEqual([
+      "1000",
+      "1000",
+    ]);
+  });
+
+  it.each([
+    [40, "forwarded"],
+    [0, "unsupported"],
+  ] as const)(
+    "records provider comment delivery status for commentAllowed=%i",
+    (commentAllowed, expectedStatus) => {
+      const draft: DraftInput = {
+        inputMode: "sats",
+        totalAmount: "2000",
+        totalPeople: 2,
+        excludePayer: true,
+        lightningAddress: "user@wallet.example",
+        overallNote: "8/30 고깃집 저녁",
+        participantNameCandidates: [],
+      };
+      const generating = createGeneratingSession(
+        draft,
+        createSettlementPreview(draft),
+        undefined,
+      );
+      const applied = applyBatchResponse(generating, {
+        ok: true,
+        provider: {
+          domain: "wallet.example",
+          commentAllowed,
+          automaticSettlementAvailable: false,
+        },
+        slots: [
+          {
+            status: "failed",
+            slotNumber: 1,
+            targetSats: "1000",
+            attempt: 1,
+            failure: {
+              code: "PROVIDER_REJECTED",
+              message: "failed",
+              retryable: true,
+            },
+          },
+        ],
+        completedCount: 0,
+        failedCount: 1,
+      });
+
+      expect(applied.providerCommentStatus).toBe(expectedStatus);
+    },
+  );
 
   it("keeps participant candidates separate from anonymous invoice slots", () => {
     const draft: DraftInput = {

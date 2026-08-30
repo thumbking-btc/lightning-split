@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PriceSnapshotDto } from "./api/serialization";
-import { requestInvoiceBatch } from "./app/api";
+import { ApiClientError, requestInvoiceBatch } from "./app/api";
 import { copyTextToClipboard, readTextFromClipboard } from "./app/clipboard";
 import {
   isLightningInvoiceInput,
@@ -26,6 +26,7 @@ import {
   markExpiredSlots,
   prepareSlotRetry,
   type DraftInput,
+  type SettlementPreview,
 } from "./app/session";
 import type { ClientSlot, SettlementSession } from "./app/types";
 import {
@@ -34,6 +35,7 @@ import {
 } from "./app/useMarketInformation";
 import { toUserMessage } from "./app/userMessage";
 import { useSettlementPolling } from "./app/useSettlementPolling";
+import { DEFAULT_LIGHTNING_POLICY } from "./config/policies";
 import type { InputMode } from "./domain/models";
 import "./styles.css";
 
@@ -402,6 +404,77 @@ export function AmountInput({
   );
 }
 
+export function SettlementPreviewDetails({
+  inputMode,
+  totalAmount,
+  totalPeople,
+  preview,
+}: {
+  readonly inputMode: InputMode;
+  readonly totalAmount: string;
+  readonly totalPeople: number;
+  readonly preview: SettlementPreview;
+}) {
+  const receivableSats = preview.targetSats.reduce(
+    (sum, amount) => sum + amount,
+    0n,
+  );
+  return (
+    <div className="preview-grid">
+      <div>
+        <span>총 금액</span>
+        <strong>
+          {totalAmount ? formatInteger(BigInt(totalAmount)) : "0"}
+          {inputMode === "krw" ? "원" : " sats"}
+        </strong>
+      </div>
+      <div>
+        <span>전체 인원</span>
+        <strong>{totalPeople}명</strong>
+      </div>
+      <div>
+        <span>정산받을 인원</span>
+        <strong>{preview.invoiceCount}명</strong>
+      </div>
+      {inputMode === "krw" ? (
+        <>
+          {preview.payerShareKrw !== null && (
+            <div>
+              <span>내 최종 부담</span>
+              <strong>{formatInteger(preview.payerShareKrw)}원</strong>
+            </div>
+          )}
+          <div>
+            <span>사람별 원화 몫</span>
+            <strong>{formatAmountRange(preview.invoiceShares, "원")}</strong>
+          </div>
+          <div>
+            <span>QR별 결제 금액</span>
+            <strong>{formatAmountRange(preview.targetSats, " sats")}</strong>
+          </div>
+        </>
+      ) : (
+        <>
+          {preview.payerShareSats !== null && (
+            <div>
+              <span>내 부담</span>
+              <strong>{formatInteger(preview.payerShareSats)} sats</strong>
+            </div>
+          )}
+          <div>
+            <span>1인당 결제 금액</span>
+            <strong>{formatAmountRange(preview.targetSats, " sats")}</strong>
+          </div>
+          <div>
+            <span>받을 총 sats</span>
+            <strong>{formatInteger(receivableSats)} sats</strong>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function App() {
   const [inputMode, setInputMode] = useState<InputMode>("krw");
   const [totalAmount, setTotalAmount] = useState("");
@@ -522,6 +595,7 @@ export function App() {
       setSession(generating);
       const response = await requestInvoiceBatch({
         address: draft.lightningAddress,
+        ...(draft.overallNote ? { providerComment: draft.overallNote } : {}),
         slots: generating.slots.map((slot) => ({
           slotNumber: slot.slotNumber,
           targetSats: slot.targetSats,
@@ -533,26 +607,38 @@ export function App() {
     } catch (cause) {
       const message = toUserMessage(cause, "정산을 시작하지 못했습니다.");
       setError(message);
-      setSession((current) =>
-        current
-          ? {
-              ...current,
-              slots: current.slots.map((slot) =>
-                slot.status === "generating"
-                  ? {
-                      ...slot,
-                      status: "failed" as const,
-                      failure: {
-                        code: "BATCH_FAILED",
-                        message,
-                        retryable: true,
-                      },
-                    }
-                  : slot,
-              ),
-            }
-          : current,
-      );
+      if (
+        cause instanceof ApiClientError &&
+        cause.code === "COMMENT_TOO_LONG"
+      ) {
+        setSession(null);
+        await clearActiveSession().catch(() =>
+          setPersistenceError(
+            "정산을 기기에서 정리하지 못했습니다. 메모를 수정한 뒤 다시 시도하십시오.",
+          ),
+        );
+      } else {
+        setSession((current) =>
+          current
+            ? {
+                ...current,
+                slots: current.slots.map((slot) =>
+                  slot.status === "generating"
+                    ? {
+                        ...slot,
+                        status: "failed" as const,
+                        failure: {
+                          code: "BATCH_FAILED",
+                          message,
+                          retryable: true,
+                        },
+                      }
+                    : slot,
+                ),
+              }
+            : current,
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -580,6 +666,9 @@ export function App() {
     try {
       const response = await requestInvoiceBatch({
         address: prepared.lightningAddress,
+        ...(prepared.overallNote
+          ? { providerComment: prepared.overallNote }
+          : {}),
         slots: [
           {
             slotNumber: target.slotNumber,
@@ -758,6 +847,19 @@ export function App() {
           note={session.overallNote}
           onNewSettlement={() => void newSettlement()}
         />
+        {session.overallNote &&
+          session.providerCommentStatus === "forwarded" && (
+            <p className="provider-comment-status" role="status">
+              정산 메모를 지갑에도 전달했습니다.
+            </p>
+          )}
+        {session.overallNote &&
+          session.providerCommentStatus === "unsupported" && (
+            <div className="global-warning" role="status">
+              이 주소는 지갑 메모 전달을 지원하지 않아 정산 메모를 이 기기에만
+              저장했습니다.
+            </div>
+          )}
         <section className="progress-card" aria-live="polite">
           <div className="progress-main">
             <strong>
@@ -962,9 +1064,15 @@ export function App() {
               value={overallNote}
               onChange={(event) => setOverallNote(event.target.value)}
               placeholder="예: 8/30 고깃집 저녁"
-              maxLength={120}
+              maxLength={
+                DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters
+              }
             />
-            <small>이 메모는 앱 내부에만 저장됩니다.</small>
+            <small>
+              {[...overallNote].length}/
+              {DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters}자 ·
+              지원하는 지갑에는 결제 메모로도 전달됩니다.
+            </small>
           </label>
           <label className="stacked-field">
             참여자 이름 미리 입력 (선택)
@@ -1007,57 +1115,28 @@ export function App() {
         {market.error && <p className="inline-error">{market.error}</p>}
         {preview.value ? (
           <>
-            <div className="preview-grid">
-              <div>
-                <span>총 금액</span>
-                <strong>
-                  {totalAmount ? formatInteger(BigInt(totalAmount)) : "0"}
-                  {inputMode === "krw" ? "원" : " sats"}
-                </strong>
-              </div>
-              <div>
-                <span>전체 인원</span>
-                <strong>{totalPeople}명</strong>
-              </div>
-              <div>
-                <span>정산받을 인원</span>
-                <strong>{preview.value.invoiceCount}명</strong>
-              </div>
-              {inputMode === "krw" && preview.value.payerShareKrw !== null && (
-                <div>
-                  <span>내 최종 부담</span>
-                  <strong>
-                    {formatInteger(preview.value.payerShareKrw)}원
-                  </strong>
-                </div>
-              )}
-              <div>
-                <span>사람별 원화 몫</span>
-                <strong>
-                  {inputMode === "krw"
-                    ? formatAmountRange(preview.value.invoiceShares, "원")
-                    : "직접 입력 기준"}
-                </strong>
-              </div>
-              <div>
-                <span>QR별 결제 금액</span>
-                <strong>
-                  {formatAmountRange(preview.value.targetSats, " sats")}
-                </strong>
-              </div>
-              {inputMode === "krw" && priceSnapshot && (
+            <SettlementPreviewDetails
+              inputMode={inputMode}
+              totalAmount={totalAmount}
+              totalPeople={totalPeople}
+              preview={preview.value}
+            />
+            {inputMode === "krw" && priceSnapshot && (
+              <div className="preview-grid">
                 <div className="wide-preview-item">
                   <span>가격 확인 시각</span>
                   <strong>
                     {new Date(priceSnapshot.snapshotAt).toLocaleString("ko-KR")}
                   </strong>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
             <p className="preview-note">
               {inputMode === "krw"
                 ? "정산 시작 시 가격을 한 번 더 확인해 고정하며 이후 결제 금액은 바뀌지 않습니다."
-                : "입력한 총 sats를 정확히 나누고 남는 1 sat은 앞 번호부터 배분합니다."}
+                : excludePayer
+                  ? "전체 공동비용을 인원수로 나누며 남는 sats는 정산자가 부담합니다."
+                  : "전체 공동비용을 모든 결제 요청에 정확히 나눕니다."}
             </p>
           </>
         ) : (

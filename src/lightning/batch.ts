@@ -78,6 +78,17 @@ function validateBatchInput(
       "The batch size is invalid.",
     );
   }
+  if (
+    input.providerComment !== undefined &&
+    (input.providerComment.length < 1 ||
+      [...input.providerComment].length >
+        policy.maximumProviderCommentCharacters)
+  ) {
+    throw new InfrastructureError(
+      "INVALID_INPUT",
+      "The provider comment is invalid.",
+    );
+  }
   const numbers = new Set<number>();
   for (const slot of input.slots) {
     if (
@@ -102,6 +113,20 @@ function validateBatchInput(
     }
     numbers.add(slot.slotNumber);
   }
+}
+
+function providerCommentForDiscovery(
+  comment: string | undefined,
+  discovery: LnurlPayDiscovery,
+): string | undefined {
+  if (comment === undefined || discovery.commentAllowed === 0) return undefined;
+  if ([...comment].length > discovery.commentAllowed) {
+    throw new InfrastructureError(
+      "COMMENT_TOO_LONG",
+      `이 Lightning Address는 정산 메모를 ${discovery.commentAllowed}자까지 지원합니다. 메모를 줄여 다시 시도하십시오.`,
+    );
+  }
+  return comment;
 }
 
 function assertDiscoverySupportsBatch(
@@ -137,6 +162,10 @@ export async function generateInvoiceBatch(
   validateBatchInput(input, policy);
   const discovery = await dependencies.client.discover(input.address);
   assertDiscoverySupportsBatch(discovery, input.slots);
+  const providerComment = providerCommentForDiscovery(
+    input.providerComment,
+    discovery,
+  );
   const results: (PendingInvoiceSlot | FailedInvoiceSlot)[] = [];
   const invoices = new Set<string>(input.excludedInvoices ?? []);
   const hashes = new Set<string>(input.excludedPaymentHashes ?? []);
@@ -164,8 +193,8 @@ export async function generateInvoiceBatch(
         discovery,
         slot.targetSats,
         {
-          ...(input.providerComment !== undefined
-            ? { comment: input.providerComment }
+          ...(providerComment !== undefined
+            ? { comment: providerComment }
             : {}),
         },
       );

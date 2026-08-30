@@ -6,6 +6,7 @@ import {
   InvoiceCard,
   MarketSummary,
   SettlementHeader,
+  SettlementPreviewDetails,
 } from "./App";
 import { serializeBigIntDecimal } from "./api/serialization";
 import type { ClientSlot } from "./app/types";
@@ -31,6 +32,31 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("8/30 고깃집 저녁");
     expect(html).toContain("정산 메모");
+  });
+
+  it("shows sats-specific group-cost and receivable labels without KRW wording", () => {
+    const html = renderToStaticMarkup(
+      <SettlementPreviewDetails
+        inputMode="sats"
+        totalAmount="3002"
+        totalPeople={3}
+        preview={{
+          invoiceShares: [1_000n, 1_000n],
+          targetSats: [1_000n, 1_000n],
+          invoiceCount: 2,
+          payerShareKrw: null,
+          payerShareSats: 1_002n,
+        }}
+      />,
+    );
+    expect(html).toContain("3,002 sats");
+    expect(html).toContain("내 부담");
+    expect(html).toContain("1,002 sats");
+    expect(html).toContain("1인당 결제 금액");
+    expect(html).toContain("받을 총 sats");
+    expect(html).toContain("2,000 sats");
+    expect(html).not.toContain("사람별 원화 몫");
+    expect(html).not.toContain("직접 입력 기준");
   });
 
   it("gives live market price and premium a clear non-technical status", () => {

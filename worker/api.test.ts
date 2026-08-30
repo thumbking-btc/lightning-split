@@ -36,7 +36,7 @@ function apiRequest(
   });
 }
 
-function mockDiscovery(): void {
+function mockDiscovery(commentAllowed = 40): void {
   network.use(
     http.get(DISCOVERY_URL, () =>
       HttpResponse.json({
@@ -45,7 +45,7 @@ function mockDiscovery(): void {
         minSendable: 1_000,
         maxSendable: 100_000_000,
         metadata: '[["text/plain","test"]]',
-        commentAllowed: 40,
+        commentAllowed,
       }),
     ),
   );
@@ -246,6 +246,103 @@ describe("Lightning Split Worker API", () => {
       ],
     });
     expect(callbackCount).toBe(3);
+  });
+
+  it("forwards the settlement note to every supported LNURL callback", async () => {
+    mockDiscovery(255);
+    const comments: (string | null)[] = [];
+    let callbackCount = 0;
+    network.use(
+      http.get(CALLBACK_URL, ({ request }) => {
+        const url = new URL(request.url);
+        comments.push(url.searchParams.get("comment"));
+        const amountSats = BigInt(url.searchParams.get("amount")!) / 1_000n;
+        callbackCount += 1;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: `worker-comment-${callbackCount}`,
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+        });
+      }),
+    );
+
+    const { response } = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [1, 2].map((slotNumber) => ({
+          slotNumber,
+          targetSats: "1000",
+          attempt: 1,
+        })),
+        providerComment: "8/30 고깃집 저녁",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(comments).toEqual(["8/30 고깃집 저녁", "8/30 고깃집 저녁"]);
+  });
+
+  it("creates invoices without a comment when the provider does not support it", async () => {
+    mockDiscovery(0);
+    let callbackComment: string | null | undefined;
+    network.use(
+      http.get(CALLBACK_URL, ({ request }) => {
+        const url = new URL(request.url);
+        callbackComment = url.searchParams.get("comment");
+        const amountSats = BigInt(url.searchParams.get("amount")!) / 1_000n;
+        return HttpResponse.json({
+          pr: createTestBolt11({
+            amountSats,
+            fixtureId: "worker-comment-unsupported",
+            timestamp: Math.floor(Date.now() / 1_000),
+          }).invoice,
+        });
+      }),
+    );
+
+    const { response } = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "8/30 고깃집 저녁",
+      }),
+    );
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(callbackComment).toBeNull();
+    expect(body).toMatchObject({
+      ok: true,
+      provider: { commentAllowed: 0 },
+      completedCount: 1,
+    });
+  });
+
+  it("rejects a provider-specific overlong comment before callbacks", async () => {
+    mockDiscovery(5);
+    const callback = vi.fn();
+    network.use(
+      http.get(CALLBACK_URL, () => {
+        callback();
+        return HttpResponse.json({ status: "ERROR", reason: "unexpected" });
+      }),
+    );
+
+    const { response } = await callWorker(
+      apiRequest("/api/invoices", {
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "123456",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "COMMENT_TOO_LONG" },
+    });
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("keeps verify URLs sealed and settles without cache-local context", async () => {

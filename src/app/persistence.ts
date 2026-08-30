@@ -130,6 +130,11 @@ function isSettlementSession(value: unknown): value is SettlementSession {
       typeof value.overallNote === "string") &&
     (value.payerShareKrw === undefined ||
       isCanonicalPositiveDecimal(value.payerShareKrw)) &&
+    (value.payerShareSats === undefined ||
+      isCanonicalPositiveDecimal(value.payerShareSats)) &&
+    (value.providerCommentStatus === undefined ||
+      value.providerCommentStatus === "forwarded" ||
+      value.providerCommentStatus === "unsupported") &&
     (value.providerDomain === undefined ||
       typeof value.providerDomain === "string") &&
     isStoredPaymentHashList(value.issuedPaymentHashes) &&

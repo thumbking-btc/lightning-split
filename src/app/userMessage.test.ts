@@ -21,4 +21,16 @@ describe("user-facing API errors", () => {
       ),
     ).toBe("안전하게 확인할 수 없는 결제 요청이 반환되었습니다.");
   });
+
+  it("preserves the provider-specific comment limit guidance", () => {
+    expect(
+      toUserMessage(
+        new ApiClientError(
+          "COMMENT_TOO_LONG",
+          "이 Lightning Address는 정산 메모를 40자까지 지원합니다. 메모를 줄여 다시 시도하십시오.",
+          false,
+        ),
+      ),
+    ).toContain("40자까지");
+  });
 });

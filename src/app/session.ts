@@ -3,6 +3,7 @@ import type {
   SettlementResponseDto,
 } from "../api/contracts";
 import type { PriceSnapshotDto } from "../api/serialization";
+import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
 import {
   createKrwSplitPlan,
   createSatsSplitPlan,
@@ -31,6 +32,7 @@ export interface SettlementPreview {
   readonly targetSats: readonly bigint[];
   readonly invoiceCount: number;
   readonly payerShareKrw: bigint | null;
+  readonly payerShareSats: bigint | null;
 }
 
 function mergePaymentHashes(
@@ -63,6 +65,15 @@ export function createSettlementPreview(
   draft: DraftInput,
   priceSnapshot?: PriceSnapshotDto,
 ): SettlementPreview {
+  if (
+    draft.overallNote !== undefined &&
+    [...draft.overallNote].length >
+      DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters
+  ) {
+    throw new Error(
+      `정산 메모는 ${DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters}자 이하여야 합니다.`,
+    );
+  }
   const total = parsePositiveDecimal(draft.totalAmount);
   if (draft.inputMode === "krw") {
     if (!priceSnapshot) throw new Error("BTC 기준가격을 먼저 조회하십시오.");
@@ -77,6 +88,7 @@ export function createSettlementPreview(
       targetSats: plan.targetSats,
       invoiceCount: plan.invoiceCount,
       payerShareKrw: plan.payerShareKrw,
+      payerShareSats: null,
     };
   }
   const plan = createSatsSplitPlan(
@@ -89,6 +101,7 @@ export function createSettlementPreview(
     targetSats: plan.invoiceShares,
     invoiceCount: plan.invoiceCount,
     payerShareKrw: null,
+    payerShareSats: plan.payerShareSats,
   };
 }
 
@@ -125,6 +138,9 @@ export function createGeneratingSession(
     ...(preview.payerShareKrw === null
       ? {}
       : { payerShareKrw: preview.payerShareKrw.toString() }),
+    ...(preview.payerShareSats === null
+      ? {}
+      : { payerShareSats: preview.payerShareSats.toString() }),
     createdAt: now.toISOString(),
     slots: Object.freeze(slots),
   };
@@ -137,6 +153,14 @@ export function applyBatchResponse(
   return {
     ...session,
     providerDomain: response.provider.domain,
+    ...(session.overallNote
+      ? {
+          providerCommentStatus:
+            response.provider.commentAllowed > 0
+              ? ("forwarded" as const)
+              : ("unsupported" as const),
+        }
+      : {}),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       response.slots.flatMap((slot) =>
@@ -211,6 +235,14 @@ export function applySlotRetryResponse(
   return {
     ...session,
     providerDomain: response.provider.domain,
+    ...(session.overallNote
+      ? {
+          providerCommentStatus:
+            response.provider.commentAllowed > 0
+              ? ("forwarded" as const)
+              : ("unsupported" as const),
+        }
+      : {}),
     issuedPaymentHashes: mergePaymentHashes(
       session.issuedPaymentHashes ?? [],
       excludedPaymentHashes,

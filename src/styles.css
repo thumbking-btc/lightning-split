@@ -416,7 +416,8 @@ button {
 }
 .preview-note,
 .privacy-note,
-.swipe-hint {
+.swipe-hint,
+.provider-comment-status {
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.55;

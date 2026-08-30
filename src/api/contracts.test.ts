@@ -59,7 +59,7 @@ describe("Worker API DTO validation", () => {
     ).toThrowError();
   });
 
-  it("keeps provider comment opt-in and validates retry exclusions", () => {
+  it("keeps an automatically forwarded provider comment and validates retry exclusions", () => {
     const parsed = parseBatchInvoiceRequest({
       address: "user@wallet.example",
       slots: [{ slotNumber: 1, targetSats: "1000", attempt: 2 }],
@@ -76,5 +76,22 @@ describe("Worker API DTO validation", () => {
       slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
     });
     expect(withoutComment.providerComment).toBeUndefined();
+  });
+
+  it("accepts at most 255 provider-comment characters", () => {
+    expect(
+      parseBatchInvoiceRequest({
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "가".repeat(255),
+      }).providerComment,
+    ).toHaveLength(255);
+    expect(() =>
+      parseBatchInvoiceRequest({
+        address: "user@wallet.example",
+        slots: [{ slotNumber: 1, targetSats: "1000", attempt: 1 }],
+        providerComment: "가".repeat(256),
+      }),
+    ).toThrowError();
   });
 });

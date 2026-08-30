@@ -50,7 +50,7 @@ describe("Lightning Address and LNURL-pay", () => {
     );
   });
 
-  it("adds amount and an explicitly opted-in comment to callback, preserving verify", async () => {
+  it("URL-encodes a supplied settlement note in the callback and preserves verify", async () => {
     const calls: URL[] = [];
     const fetcher = jsonFetcher((url) => {
       calls.push(url);
@@ -61,7 +61,7 @@ describe("Lightning Address and LNURL-pay", () => {
           minSendable: 1_000,
           maxSendable: 10_000_000,
           metadata: '[["text/plain","test"]]',
-          commentAllowed: 10,
+          commentAllowed: 40,
         };
       }
       return { pr: "lnbc-test", verify: "https://wallet.example/verify/one" };
@@ -69,11 +69,12 @@ describe("Lightning Address and LNURL-pay", () => {
     const client = new LnurlPayClient(fetcher);
     const discovery = await client.discover("user@wallet.example");
     const invoice = await client.requestInvoice(discovery, 1_000n, {
-      comment: "dinner",
+      comment: "8/30 고깃집 저녁",
     });
     expect(calls[1]?.searchParams.get("opaque")).toBe("abc");
     expect(calls[1]?.searchParams.get("amount")).toBe("1000000");
-    expect(calls[1]?.searchParams.get("comment")).toBe("dinner");
+    expect(calls[1]?.searchParams.get("comment")).toBe("8/30 고깃집 저녁");
+    expect(calls[1]?.toString()).not.toContain("고깃집");
     expect(invoice.verifyUrl).toBe("https://wallet.example/verify/one");
   });
 

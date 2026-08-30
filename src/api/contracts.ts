@@ -1,5 +1,6 @@
 import type { PriceSnapshotDto } from "./serialization";
 import { parseBigIntDecimal } from "./serialization";
+import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
 import { InfrastructureError } from "../infrastructure/errors";
 import { isRecord } from "../infrastructure/validation";
 import type { InvoiceSlotRequest } from "../lightning/batch";
@@ -207,7 +208,8 @@ export function parseBatchInvoiceRequest(value: unknown): {
     value.providerComment !== undefined &&
     (typeof value.providerComment !== "string" ||
       value.providerComment.length < 1 ||
-      [...value.providerComment].length > 120)
+      [...value.providerComment].length >
+        DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters)
   ) {
     throw new InfrastructureError(
       "INVALID_INPUT",

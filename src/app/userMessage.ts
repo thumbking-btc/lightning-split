@@ -11,6 +11,8 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   AMOUNT_OUT_OF_RANGE: "이 주소에서 받을 수 있는 금액 범위를 벗어났습니다.",
   PAYER_DATA_REQUIRED:
     "추가 송금자 정보를 요구하는 주소는 현재 지원하지 않습니다.",
+  COMMENT_TOO_LONG:
+    "입력한 정산 메모가 이 주소의 허용 길이를 초과합니다. 메모를 줄여 다시 시도하십시오.",
   INVALID_BOLT11: "안전하게 확인할 수 없는 결제 요청이 반환되었습니다.",
   DUPLICATE_PAYMENT_HASH: "이전 결제 요청이 재사용되어 안전하게 중단했습니다.",
   BATCH_ABORTED: "안전 확인 문제로 남은 결제 요청 생성을 중단했습니다.",
@@ -22,6 +24,7 @@ export function toUserMessage(
   fallback = "요청을 완료하지 못했습니다.",
 ): string {
   if (cause instanceof ApiClientError) {
+    if (cause.code === "COMMENT_TOO_LONG") return cause.message;
     const message = ERROR_MESSAGES[cause.code] ?? fallback;
     return cause.code === "RATE_LIMITED" && cause.retryAfterSeconds
       ? `${message} 약 ${cause.retryAfterSeconds}초 후 다시 시도할 수 있습니다.`
