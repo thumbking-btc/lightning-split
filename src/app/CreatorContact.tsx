@@ -69,9 +69,9 @@ export function CreatorContact() {
               <span className="creator-contact-label">MADE BY</span>
               <strong>엄지왕</strong>
               <p>
-                Lightning Split을 사용하면서 궁금한 점, 불편한 점, 개선 아이디어가
-                있다면 알려주십시오. 실제 지갑에서 발견한 호환성 문제 제보도
-                환영합니다.
+                Lightning Split을 사용하면서 궁금한 점, 불편한 점, 개선
+                아이디어가 있다면 알려주십시오. 실제 지갑에서 발견한 호환성 문제
+                제보도 환영합니다.
               </p>
             </div>
           </div>
@@ -88,17 +88,20 @@ export function CreatorContact() {
             </a>
           </nav>
 
-          <article className="creator-support" aria-labelledby="creator-support-title">
+          <article
+            className="creator-support"
+            aria-labelledby="creator-support-title"
+          >
             <div className="creator-support-copy">
               <span className="creator-contact-label">SUPPORT</span>
               <h3 id="creator-support-title">라이트닝으로 후원하기</h3>
               <p>
-                Lightning Split이 도움이 되었다면 지속적인 검증과 다음 버전 제작을
-                후원해 주십시오.
+                Lightning Split이 도움이 되었다면 지속적인 검증과 다음 버전
+                제작을 후원해 주십시오.
               </p>
               <p className="creator-support-note">
-                후원하기 전, 라이트닝 지갑에 표시된 수신 주소가 아래 주소와 같은지
-                확인해 주십시오.
+                후원하기 전, 라이트닝 지갑에 표시된 수신 주소가 아래 주소와
+                같은지 확인해 주십시오.
               </p>
             </div>
             <figure className="creator-support-figure">
