@@ -654,6 +654,30 @@ button {
     SFMono-Regular,
     monospace;
 }
+.verification-panel {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.85rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.verification-panel.auto {
+  color: #0f6749;
+  background: #e8f6ef;
+}
+.verification-panel.manual {
+  color: #624581;
+  background: #f5effa;
+}
+.verification-panel.delayed {
+  color: #765a17;
+  background: #fff5d8;
+}
+.verification-panel span {
+  font-size: 0.7rem;
+}
 .qr-shell {
   display: grid;
   place-items: center;

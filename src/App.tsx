@@ -41,6 +41,7 @@ import {
   prepareSlotRetry,
   type DraftInput,
   type SettlementPreview,
+  undoManualConfirmation,
 } from "./app/session";
 import type { ClientSlot, SettlementSession } from "./app/types";
 import {
@@ -124,14 +125,18 @@ function slotStatus(slot: ClientSlot): { label: string; tone: string } {
       tone: slot.settlementEvidence ? "done" : "manual",
     };
   if (slot.status === "manuallyConfirmed")
-    return { label: "사용자 확인", tone: "manual" };
+    return { label: "직접 확인 완료", tone: "manual" };
   if (slot.status === "legacyReviewRequired")
     return { label: "이전 기록 확인 필요", tone: "manual" };
   if (slot.status === "expired") return { label: "만료", tone: "muted" };
   if (slot.status === "failed") return { label: "생성 실패", tone: "error" };
   if (slot.invoice?.awaitingPersistence === true)
     return { label: "결제 요청 저장 중", tone: "working" };
-  return { label: "결제 대기", tone: "waiting" };
+  if (slot.verificationDelayed && slot.invoice?.verificationToken)
+    return { label: "자동 확인 지연 · 직접 확인 가능", tone: "working" };
+  if (slot.invoice?.verificationToken)
+    return { label: "결제 대기 · 자동 확인 중", tone: "waiting" };
+  return { label: "결제 대기 · 직접 확인 필요", tone: "manual" };
 }
 
 function ExpiryCountdown({ expiresAt }: { readonly expiresAt: string }) {
@@ -156,6 +161,7 @@ export function InvoiceCard({
   onAnnotate,
   onRetry,
   onManualConfirm,
+  onUndoManualConfirm,
 }: {
   readonly slot: ClientSlot;
   readonly candidates: readonly string[];
@@ -164,11 +170,10 @@ export function InvoiceCard({
   readonly onAnnotate: (slotNumber: number, displayName: string) => void;
   readonly onRetry: (slotNumber: number) => void;
   readonly onManualConfirm: (slotNumber: number) => void;
+  readonly onUndoManualConfirm: (slotNumber: number) => void;
 }) {
   const status = slotStatus(slot);
   const [copyFeedback, setCopyFeedback] = useState<string>();
-  const completed =
-    slot.status === "settled" || slot.status === "manuallyConfirmed";
 
   const copyInvoice = async () => {
     if (!slot.invoice) return;
@@ -208,10 +213,71 @@ export function InvoiceCard({
         </p>
       )}
 
+      <div className="annotation-panel participant-panel">
+        <label>
+          이 결제의 참여자 <span>선택</span>
+          <input
+            value={slot.annotation?.displayName ?? ""}
+            onChange={(event) => onAnnotate(slot.slotNumber, event.target.value)}
+            placeholder="예: 민수"
+          />
+        </label>
+        {candidates.length > 0 && (
+          <div className="candidate-list" aria-label="참여자 이름 후보">
+            {candidates.map((candidate) => (
+              <button
+                type="button"
+                key={candidate}
+                aria-pressed={slot.annotation?.displayName === candidate}
+                onClick={() => onAnnotate(slot.slotNumber, candidate)}
+              >
+                {candidate}
+              </button>
+            ))}
+          </div>
+        )}
+        <p>
+          이름은 이 기기의 정산 화면에만 저장되며 결제 QR이나 라이트닝
+          네트워크에는 포함되지 않습니다.
+        </p>
+      </div>
+
       {slot.invoice &&
         slot.status === "pending" &&
         slot.invoice.awaitingPersistence !== true && (
           <>
+            <div
+              className={`verification-panel ${
+                slot.verificationDelayed
+                  ? "delayed"
+                  : slot.invoice.verificationToken
+                    ? "auto"
+                    : "manual"
+              }`}
+              role="status"
+            >
+              {slot.verificationDelayed ? (
+                <>
+                  <strong>자동 확인 지연</strong>
+                  <span>
+                    받는 지갑에서 직접 확인해 완료할 수 있습니다.
+                  </span>
+                </>
+              ) : slot.invoice.verificationToken ? (
+                <>
+                  <strong>자동 확인 중</strong>
+                  <span>입금이 확인되면 자동으로 완료됩니다.</span>
+                </>
+              ) : (
+                <>
+                  <strong>직접 확인 필요</strong>
+                  <span>
+                    이 결제는 자동 확인을 사용할 수 없습니다. 받는 지갑에서
+                    입금을 확인하십시오.
+                  </span>
+                </>
+              )}
+            </div>
             <div className="qr-shell">
               {renderQr ? (
                 <QrCode invoice={slot.invoice.bolt11} />
@@ -350,36 +416,16 @@ export function InvoiceCard({
             </button>
           </div>
         )}
-      {completed && (
-        <div className="annotation-panel">
-          <label>
-            누가 보냈나요? <span>선택</span>
-            <input
-              value={slot.annotation?.displayName ?? ""}
-              onChange={(event) =>
-                onAnnotate(slot.slotNumber, event.target.value)
-              }
-              placeholder="이름을 입력하십시오"
-            />
-          </label>
-          {candidates.length > 0 && (
-            <div className="candidate-list" aria-label="참여자 이름 후보">
-              {candidates.map((candidate) => (
-                <button
-                  type="button"
-                  key={candidate}
-                  aria-pressed={slot.annotation?.displayName === candidate}
-                  onClick={() => onAnnotate(slot.slotNumber, candidate)}
-                >
-                  {candidate}
-                </button>
-              ))}
-            </div>
-          )}
-          <p>
-            이 이름은 사용자가 붙인 표시정보이며 라이트닝 네트워크가 인증한
-            송금자 신원이 아닙니다.
-          </p>
+      {slot.status === "manuallyConfirmed" && (
+        <div className="manual-panel" role="status">
+          <span>받는 지갑에서 직접 확인한 결제로 완료 표시했습니다.</span>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onUndoManualConfirm(slot.slotNumber)}
+          >
+            완료 표시 취소
+          </button>
         </div>
       )}
     </article>
@@ -1039,6 +1085,16 @@ export function App() {
     updateSession((current) => manuallyConfirmSlot(current, slotNumber));
   };
 
+  const undoManualConfirm = (slotNumber: number) => {
+    if (
+      !window.confirm(
+        "수동으로 표시한 결제 완료를 취소하고 다시 결제 대기 상태로 돌리겠습니까? 이미 실제로 받은 결제 자체가 취소되는 것은 아닙니다.",
+      )
+    )
+      return;
+    updateSession((current) => undoManualConfirmation(current, slotNumber));
+  };
+
   const pasteLightningAddress = async () => {
     const pasted = await readTextFromClipboard();
     if (!pasted) {
@@ -1110,11 +1166,7 @@ export function App() {
 
     const previousStatus = previous.statuses[activeSlotIndex];
     const currentStatus = session.slots[activeSlotIndex]?.status;
-    const wasCompleted =
-      previousStatus === "settled" || previousStatus === "manuallyConfirmed";
-    const isCompleted =
-      currentStatus === "settled" || currentStatus === "manuallyConfirmed";
-    if (wasCompleted || !isCompleted) return;
+    if (previousStatus === "settled" || currentStatus !== "settled") return;
 
     const nextIndex = nextActionableSlotIndex(session, activeSlotIndex);
     if (nextIndex === undefined) return;
@@ -1189,7 +1241,7 @@ export function App() {
           )}
           {progress.manuallyConfirmedCount > 0 && (
             <p className="manual-progress">
-              사용자 확인 {progress.manuallyConfirmedCount}명 포함
+              직접 확인 {progress.manuallyConfirmedCount}명 포함
             </p>
           )}
           <div
@@ -1265,6 +1317,7 @@ export function App() {
               onAnnotate={annotate}
               onRetry={(slotNumber) => void retrySlot(slotNumber)}
               onManualConfirm={manualConfirm}
+              onUndoManualConfirm={undoManualConfirm}
             />
           ))}
         </section>
@@ -1410,8 +1463,9 @@ export function App() {
               rows={2}
             />
             <small>
-              쉼표·줄바꿈을 권장합니다. 구분자가 없으면 공백으로 나눕니다. 결제
-              후 누가 보냈는지 표시할 때만 사용합니다.
+              쉼표·줄바꿈을 권장합니다. 각 결제 QR에 참여자 이름을 미리 붙일 때
+              사용합니다. 이름은 이 기기에만 저장되며 QR 자체에는 포함되지
+              않습니다.
             </small>
           </label>
         </details>
