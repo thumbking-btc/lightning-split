@@ -3,22 +3,15 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("legacy service worker migration", () => {
-  it("activates immediately and reloads controlled windows from the network", async () => {
+  it("activates immediately without starting a second competing navigation", async () => {
     const listeners = new Map<string, (event: unknown) => void>();
-    const navigate = vi.fn(() => Promise.resolve());
     const claim = vi.fn(() => Promise.resolve());
-    const matchAll = vi.fn(() =>
-      Promise.resolve([
-        { url: "https://example.test/", navigate },
-        { url: "https://example.test/session", navigate },
-      ]),
-    );
     const skipWaiting = vi.fn(() => Promise.resolve());
     runInNewContext(
       readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8"),
       {
         Promise,
-        clients: { claim, matchAll },
+        clients: { claim },
         skipWaiting,
         addEventListener: (type: string, listener: (event: unknown) => void) =>
           listeners.set(type, listener),
@@ -37,7 +30,5 @@ describe("legacy service worker migration", () => {
     await activation;
 
     expect(claim).toHaveBeenCalledOnce();
-    expect(matchAll).toHaveBeenCalledWith({ type: "window" });
-    expect(navigate).toHaveBeenCalledTimes(2);
   });
 });
