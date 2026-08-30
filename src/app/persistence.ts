@@ -153,7 +153,7 @@ function isStoredSlot(value: unknown): boolean {
       value.verificationDelayed === undefined &&
       value.settlementEvidence === undefined &&
       value.legacySettlement === undefined &&
-      value.annotation === undefined
+      (value.annotation === undefined || isStoredAnnotation(value.annotation))
     );
   }
   if (value.status === "failed") {
@@ -168,7 +168,7 @@ function isStoredSlot(value: unknown): boolean {
       value.verificationDelayed === undefined &&
       value.settlementEvidence === undefined &&
       value.legacySettlement === undefined &&
-      value.annotation === undefined
+      (value.annotation === undefined || isStoredAnnotation(value.annotation))
     );
   }
   if (
@@ -216,8 +216,7 @@ function isStoredSlot(value: unknown): boolean {
     (value.settledAt !== undefined ||
       value.confirmedAt !== undefined ||
       value.settlementEvidence !== undefined ||
-      value.legacySettlement !== undefined ||
-      value.annotation !== undefined)
+      value.legacySettlement !== undefined)
   ) {
     return false;
   }
