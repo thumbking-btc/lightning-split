@@ -1,0 +1,45 @@
+name: Copy creator support assets
+
+on:
+  push:
+    branches:
+      - feature/creator-support-panel
+    paths:
+      - .github/workflows/copy-creator-support-assets.yml
+
+permissions:
+  contents: write
+
+jobs:
+  copy-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/creator-support-panel
+          fetch-depth: 0
+
+      - name: Copy original P2P Check assets byte-for-byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/thumbking-btc/bitcoin-p2p-check/main/public/creator-logo.jpg \
+            --output public/creator-logo.jpg
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/thumbking-btc/bitcoin-p2p-check/main/public/lightning-support-qr.png \
+            --output public/lightning-support-qr.png
+
+          test "$(git hash-object public/creator-logo.jpg)" = "9c32c2f7c5a6f64dff9c627eff493052b077b764"
+          test "$(git hash-object public/lightning-support-qr.png)" = "195b36cc20b56a4ce56ce3ecc8042880d85ed29e"
+
+      - name: Commit copied assets and remove this one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/creator-logo.jpg public/lightning-support-qr.png
+          git rm .github/workflows/copy-creator-support-assets.yml
+          git commit -m "Copy original creator support assets"
+          git push origin HEAD:feature/creator-support-panel
