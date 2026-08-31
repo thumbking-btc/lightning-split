@@ -10,7 +10,10 @@ import { ApiClientError } from "./api";
 const USD_REST_REFRESH_MS = 16_000;
 
 export type UsdMarketConnection =
-  "connecting" | "recent" | "stale" | "unavailable";
+  | "connecting"
+  | "recent"
+  | "stale"
+  | "unavailable";
 
 export interface UsdMarketInformationState {
   readonly information?: UsdPriceResponseDto;
@@ -124,7 +127,7 @@ export async function fetchUsdPriceInformation(): Promise<UsdPriceResponseDto> {
   };
 }
 
-export function useUsdMarketInformation(): {
+export function useUsdMarketInformation(enabled = true): {
   readonly market: UsdMarketInformationState;
   readonly refreshLockedSnapshot: () => Promise<UsdPriceResponseDto>;
 } {
@@ -158,6 +161,7 @@ export function useUsdMarketInformation(): {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let active = true;
     const poll = async () => {
       try {
@@ -174,7 +178,7 @@ export function useUsdMarketInformation(): {
       active = false;
       window.clearInterval(timer);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   return {
     market,
