@@ -17,7 +17,6 @@ describe("Coinbase realtime BTC/USD", () => {
     });
     expect(JSON.parse(createCoinbaseHeartbeatSubscription())).toEqual({
       type: "subscribe",
-      product_ids: ["BTC-USD"],
       channel: "heartbeats",
     });
   });

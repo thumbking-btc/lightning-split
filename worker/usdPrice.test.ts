@@ -43,10 +43,15 @@ describe("BTC/USD Worker API", () => {
             time: new Date(Date.now() - 1_000).toISOString(),
           }),
       ),
-      http.get("https://api.binance.com/api/v3/ticker/price", ({ request }) => {
-        expect(new URL(request.url).searchParams.get("symbol")).toBe("BTCUSDT");
-        return HttpResponse.json({ symbol: "BTCUSDT", price: "100000.00" });
-      }),
+      http.get(
+        "https://data-api.binance.vision/api/v3/ticker/price",
+        ({ request }) => {
+          expect(new URL(request.url).searchParams.get("symbol")).toBe(
+            "BTCUSDT",
+          );
+          return HttpResponse.json({ symbol: "BTCUSDT", price: "100000.00" });
+        },
+      ),
     );
 
     const response = await worker.fetch(priceRequest(), TEST_ENV);

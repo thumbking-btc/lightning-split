@@ -54,7 +54,6 @@ export function createCoinbaseTickerSubscription(): string {
 export function createCoinbaseHeartbeatSubscription(): string {
   return JSON.stringify({
     type: "subscribe",
-    product_ids: [USD_REALTIME_MARKET_POLICY.productId],
     channel: "heartbeats",
   });
 }

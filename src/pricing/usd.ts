@@ -260,7 +260,7 @@ export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAd
 
   async fetchObservation(): Promise<UsdPremiumReferenceObservation> {
     const response = await fetchBoundedJson(
-      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+      "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
       this.policy.http,
       this.fetcher,
       this.clock,
