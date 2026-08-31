@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 
+// This branch-only hook creates an isolated device-test Worker without touching main.
 const isWorkersBuild = process.env.WORKERS_CI === "1";
 const branch = process.env.WORKERS_CI_BRANCH?.trim();
 
