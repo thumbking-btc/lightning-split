@@ -46,6 +46,9 @@ import {
 
 type AppEnv = Env & {
   readonly VERIFICATION_TOKEN_SECRET?: string;
+  readonly ASSETS: {
+    fetch(request: Request): Promise<Response>;
+  };
 };
 
 const JSON_HEADERS = {
@@ -335,6 +338,9 @@ export async function handleApiRequest(
 
 export default {
   fetch(request, env): Promise<Response> {
-    return handleApiRequest(request, env);
+    const url = new URL(request.url);
+    return url.pathname.startsWith("/api/")
+      ? handleApiRequest(request, env)
+      : env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<AppEnv>;
