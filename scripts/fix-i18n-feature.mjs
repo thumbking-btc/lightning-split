@@ -85,6 +85,19 @@ await replaceInFile("src/app/session.ts", [
       ? {}
       : { payerShareUsdCents: preview.payerShareUsdCents.toString() }),`,
   ],
+  [
+    `    slots: session.slots.map((slot): ClientSlot =>
+      slot.slotNumber === slotNumber
+        ? {
+            ...slot,
+            annotation: {`,
+    `    slots: session.slots.map((slot): ClientSlot =>
+      slot.slotNumber === slotNumber &&
+      (slot.status === "settled" || slot.status === "manuallyConfirmed")
+        ? {
+            ...slot,
+            annotation: {`,
+  ],
 ]);
 
 await replaceInFile("src/lightning/settlement.ts", [
