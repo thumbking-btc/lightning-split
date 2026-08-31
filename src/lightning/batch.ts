@@ -8,7 +8,7 @@ import type {
 import { InfrastructureError } from "../infrastructure/errors";
 import { Bolt11InvoiceError, validateBolt11Invoice } from "./bolt11";
 import type { LnurlPayDiscovery, LnurlPayClient } from "./lnurl";
-import { selectSettlementCapability } from "./settlement";
+import { selectSettlementCapability } from "./settlement-capability";
 
 export interface InvoiceSlotRequest {
   readonly slotNumber: number;
