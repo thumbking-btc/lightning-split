@@ -1,4 +1,4 @@
-name: Verify i18n currency
+name: Verify feature branches
 
 on:
   push:
