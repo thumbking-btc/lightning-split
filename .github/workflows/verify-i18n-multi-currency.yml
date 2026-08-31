@@ -1,9 +1,9 @@
-name: Verify i18n multi currency
+name: Verify i18n currency
 
 on:
   push:
     branches:
-      - feat/i18n-multi-currency
+      - feature/i18n-currency
   pull_request:
     branches:
       - main
