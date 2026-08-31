@@ -35,7 +35,7 @@ import {
   WorkerUsdPremiumReferenceCache,
   WorkerUsdPriceSnapshotCache,
 } from "./cache";
-import { fingerprintInvoiceBatchInput } from "./invoiceBatch";
+import { createInvoiceBatchResponse } from "./invoiceBatch";
 import { enforceRateLimit } from "./rateLimit";
 import { readBoundedRequestJson } from "./request";
 import {
@@ -46,8 +46,6 @@ import {
 type AppEnv = Env & {
   readonly VERIFICATION_TOKEN_SECRET?: string;
 };
-
-export { InvoiceBatchCoordinator } from "./invoiceBatch";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -230,29 +228,13 @@ async function handleInvoices(
   assertSameOrigin(request);
   await enforceRateLimit(request, env.INVOICE_RATE_LIMITER, "invoices");
   const input = parseBatchInvoiceRequest(await readBoundedRequestJson(request));
-  const coordinated = await env.INVOICE_BATCHES.getByName(
-    input.requestId,
-  ).issueForApi(
-    await fingerprintInvoiceBatchInput(input),
-    input,
-    optionalVerificationSecret(env),
+  const secret = optionalVerificationSecret(env);
+  return jsonResponse(
+    await createInvoiceBatchResponse(
+      input,
+      secret === undefined ? {} : { VERIFICATION_TOKEN_SECRET: secret },
+    ),
   );
-  if (!coordinated.ok) {
-    throw new InfrastructureError(
-      coordinated.error.code,
-      coordinated.error.message,
-      {
-        retryable: coordinated.error.retryable,
-        ...(coordinated.error.upstreamStatus === undefined
-          ? {}
-          : { upstreamStatus: coordinated.error.upstreamStatus }),
-        ...(coordinated.error.retryAfterSeconds === undefined
-          ? {}
-          : { retryAfterSeconds: coordinated.error.retryAfterSeconds }),
-      },
-    );
-  }
-  return jsonResponse(coordinated.response);
 }
 
 function settlementResponse(

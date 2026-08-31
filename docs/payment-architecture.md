@@ -67,19 +67,21 @@ LUD-21은 recipient provider의 settlement attestation을 조회하는 경로입
 - invoice API: Cloudflare rate-limit binding 기준 IP별 30 batch/분
 - settlement API: IP별 300회/분
 - QR 생성: 현재 카드와 양옆 카드만 활성화
-- 허용 invoice 잔여 수명: 최대 24시간; replay 보관은 만료 후 확인 기간까지 포함한 8일
+- 허용 invoice 잔여 수명: 최대 24시간; 재발급 전후 invoice 이력은 브라우저에서 7일간 보관
 
 20명은 Lightning protocol 한계가 아니라 모바일 carousel 탐색, 최대 20개의 payable invoice 관리, callback 지연을 함께 고려한 제품 상한입니다. 상향하려면 목록 탐색/virtualization과 provider-domain별 quota를 먼저 재검증해야 합니다.
 
-## 중복 발급과 저장
+## 발급 실패와 저장 경계
 
-새 client는 초기 batch와 각 재발급에 안정적인 request ID를 보냅니다. `InvoiceBatchCoordinator` Durable Object는 같은 request ID와 입력에 동일 응답을 재생합니다. provider callback timeout도 실패 응답으로 보관하므로 client 재시도가 두 번째 callback을 자동 실행하지 않습니다. 같은 ID를 다른 입력에 재사용하면 거부합니다.
+invoice 발급 API는 서버에 replay 상태를 저장하지 않는 stateless 경로입니다. `requestId`는 이전 클라이언트와의 요청 형식 호환을 위해 남겨 두지만 Worker가 같은 ID의 과거 응답을 보관하거나 재생하지 않습니다.
 
-재생 결과는 8일 후 alarm으로 삭제됩니다. 여기에는 발급된 invoice와 provider domain이 포함되지만 정산 메모와 Lightning Address 입력 원문은 포함되지 않습니다. 활성 정산 UI 상태와 참여자 이름은 브라우저 IndexedDB에 저장합니다.
+브라우저가 `/api/invoices`의 응답을 받지 못한 네트워크 수준 실패는 발급 결과가 불명확하므로 자동 재전송하지 않습니다. 클라이언트는 이를 `ISSUANCE_UNKNOWN`으로 처리하고, 정산자가 받는 지갑의 상태를 확인한 뒤 새 정산을 시작하도록 안내합니다. 반대로 Worker가 provider discovery 또는 callback의 명시적 실패 응답을 정상적으로 돌려준 경우에는 해당 실패 원인과 retryable 여부를 화면에 반영합니다.
 
-IndexedDB v2는 revision compare-and-swap으로 저장과 삭제를 모두 보호합니다. 오래 열린 탭이 다른 탭의 최신 정산을 덮어쓰거나 삭제하려 하면 최신 상태를 다시 불러오며, 구 v1 완료 기록은 자동·수동 근거를 추측하지 않고 받는 지갑 재확인이 필요한 상태로 이관합니다. 재발급 전후 invoice의 자동·수동 완료 근거는 7일간 이력에 남겨 지연 결제가 겹치면 이중 입금 가능성을 경고합니다.
+정상적으로 받은 BOLT11은 즉시 QR로 노출하지 않습니다. 먼저 브라우저 IndexedDB에 저장할 때까지 `awaitingPersistence` 상태로 유지하고, 저장이 성공한 invoice만 결제 QR로 표시합니다. 저장에 실패하면 해당 invoice는 화면에 표시하지 않고 실패 상태로 전환합니다.
 
-외부 provider 자체가 idempotency를 제공하지 않으므로 Worker가 callback 응답을 받은 직후 응답 저장 전에 중단되는 극단적인 구간까지 exactly-once를 증명할 수는 없습니다. 저장된 fingerprint만 남은 재시도는 새 callback을 실행하지 않고 `ISSUANCE_UNKNOWN`으로 중단합니다.
+활성 정산 UI 상태, 참여자 이름, 발급된 invoice와 payment hash, 재발급 이력은 브라우저 IndexedDB에 저장합니다. IndexedDB v2는 revision compare-and-swap으로 저장과 삭제를 보호하며, 오래 열린 탭이 다른 탭의 최신 정산을 덮어쓰거나 삭제하려 하면 최신 상태를 다시 불러옵니다. 재발급 전후 invoice의 자동·수동 완료 근거는 7일간 이력에 남겨 지연 결제가 겹치면 이중 입금 가능성을 경고합니다.
+
+이 구조는 provider callback 자체의 exactly-once 발급을 보장하지 않습니다. 응답 유실이나 provider 내부 동작 때문에 화면에 노출되지 않은 미결제 invoice가 남을 수 있으므로, 자동 재전송보다 명시적인 실패 폐쇄를 선택합니다. Lightning Split은 해당 invoice를 자동 결제하지 않으며 사용자가 확인하지 못한 invoice를 QR로 노출하지 않습니다.
 
 ## 규격 근거
 

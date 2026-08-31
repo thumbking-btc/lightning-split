@@ -47,7 +47,7 @@ export interface UsdPriceResponseDto {
 }
 
 export interface BatchInvoiceRequestDto {
-  /** Client-generated key used to make a retried batch request idempotent. */
+  /** Client correlation key retained for compatibility; the Worker does not persist or replay it. */
   readonly requestId: string;
   readonly address: string;
   readonly slots: readonly {

@@ -1,4 +1,3 @@
-import { env } from "cloudflare:workers";
 import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -7,10 +6,12 @@ import { network } from "./test/network";
 
 const APP_ORIGIN = "https://app.example";
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
+const ALLOWING_RATE_LIMITER = {
+  limit: () => Promise.resolve({ success: true }),
+} as unknown as RateLimit;
 const TEST_ENV = {
-  INVOICE_RATE_LIMITER: env.INVOICE_RATE_LIMITER,
-  SETTLEMENT_RATE_LIMITER: env.SETTLEMENT_RATE_LIMITER,
-  INVOICE_BATCHES: env.INVOICE_BATCHES,
+  INVOICE_RATE_LIMITER: ALLOWING_RATE_LIMITER,
+  SETTLEMENT_RATE_LIMITER: ALLOWING_RATE_LIMITER,
   VERIFICATION_TOKEN_SECRET: "11".repeat(32),
 };
 

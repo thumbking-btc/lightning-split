@@ -149,22 +149,17 @@ describe("invoice API response correlation", () => {
     expect(result.slots[0].invoice.disposable).toBeUndefined();
   });
 
-  it("replays an idempotent request once after a network failure", async () => {
+  it("does not automatically replay an invoice request after a network failure", async () => {
     const fetcher = vi
       .fn()
-      .mockRejectedValueOnce(new TypeError("connection reset"))
-      .mockResolvedValueOnce(
-        response([pendingSlot(1, "1000", 1), pendingSlot(2, "1001", 2)]),
-      );
+      .mockRejectedValueOnce(new TypeError("connection reset"));
     vi.stubGlobal("fetch", fetcher);
 
-    await expect(requestInvoiceBatch(request)).resolves.toMatchObject({
-      completedCount: 2,
+    await expect(requestInvoiceBatch(request)).rejects.toMatchObject({
+      code: "ISSUANCE_UNKNOWN",
+      retryable: false,
     });
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
-      fetcher.mock.calls[1]?.[1]?.body,
-    );
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it("turns malformed JSON into a stable user-facing API error", async () => {
