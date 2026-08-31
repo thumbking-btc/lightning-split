@@ -8,48 +8,67 @@ if (!isWorkersBuild || branch !== "preview/settlement-history") {
 }
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-const deploy = spawnSync(
+const upload = spawnSync(
   npx,
-  ["wrangler", "deploy", "--config", "wrangler.runtime-preview.jsonc"],
+  [
+    "wrangler",
+    "versions",
+    "upload",
+    "--preview-alias",
+    "settlement-history-preview",
+  ],
   {
     encoding: "utf8",
     env: process.env,
   },
 );
 
-if (deploy.stdout) process.stdout.write(deploy.stdout);
-if (deploy.stderr) process.stderr.write(deploy.stderr);
-if (deploy.error) throw deploy.error;
-if (deploy.status !== 0) {
+if (upload.stdout) process.stdout.write(upload.stdout);
+if (upload.stderr) process.stderr.write(upload.stderr);
+if (upload.error) throw upload.error;
+if (upload.status !== 0) {
   throw new Error(
-    `Runtime Preview deployment failed with exit code ${deploy.status ?? "unknown"}.`,
+    `Cloudflare Preview upload failed with exit code ${upload.status ?? "unknown"}.`,
   );
 }
 
+const output = `${upload.stdout ?? ""}\n${upload.stderr ?? ""}`;
+const urls = [...output.matchAll(/https:\/\/[^\s]+\.workers\.dev\/?/gu)].map(
+  (match) => match[0].replace(/[),.;]+$/u, ""),
+);
 const previewUrl =
-  "https://lightning-split-preview-runtime.thumbking-btc.workers.dev/";
+  urls.find((url) => url.includes("settlement-history-preview-lightning-split")) ??
+  urls.find((url) => url.includes("-lightning-split."));
+
+if (!previewUrl) {
+  throw new Error(
+    "Wrangler uploaded the Preview version but did not return a Preview URL.",
+  );
+}
+
 let lastError;
 for (let attempt = 1; attempt <= 12; attempt += 1) {
   try {
     const response = await fetch(previewUrl, {
-      headers: { "User-Agent": "lightning-split-runtime-preview-smoke-test" },
+      headers: { "User-Agent": "lightning-split-preview-smoke-test" },
       redirect: "follow",
     });
     const body = await response.text();
     if (response.ok && /LIGHTNING SPLIT|Lightning Split/u.test(body)) {
-      const manifest = await fetch(`${previewUrl}manifest.webmanifest`, {
-        headers: { "User-Agent": "lightning-split-runtime-preview-smoke-test" },
+      const manifest = await fetch(new URL("/manifest.webmanifest", previewUrl), {
+        headers: { "User-Agent": "lightning-split-preview-smoke-test" },
+        redirect: "follow",
       });
       if (manifest.ok) {
-        console.log(`Verified runtime Preview PWA: ${previewUrl}`);
+        console.log(`Verified PWA Preview URL: ${previewUrl}`);
         process.exit(0);
       }
       lastError = new Error(
-        `Runtime Preview app shell loaded but manifest returned HTTP ${manifest.status}.`,
+        `Preview app shell loaded but manifest returned HTTP ${manifest.status}.`,
       );
     } else {
       lastError = new Error(
-        `Runtime Preview returned HTTP ${response.status} without the Lightning Split app shell.`,
+        `Preview returned HTTP ${response.status} without the Lightning Split app shell.`,
       );
     }
   } catch (cause) {
@@ -61,6 +80,6 @@ for (let attempt = 1; attempt <= 12; attempt += 1) {
   }
 }
 
-throw new Error(`Runtime Preview was deployed but is not usable: ${previewUrl}`, {
+throw new Error(`Preview URL was created but is not usable: ${previewUrl}`, {
   cause: lastError,
 });
