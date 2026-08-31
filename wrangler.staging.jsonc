@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lightning-split-staging",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-08-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "ratelimits": [
+    {
+      "name": "INVOICE_RATE_LIMITER",
+      "namespace_id": "2026083101",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "SETTLEMENT_RATE_LIMITER",
+      "namespace_id": "2026083102",
+      "simple": { "limit": 300, "period": 60 }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INVOICE_BATCHES",
+        "class_name": "InvoiceBatchCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["InvoiceBatchCoordinator"]
+    }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  }
+}
