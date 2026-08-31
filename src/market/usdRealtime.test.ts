@@ -4,6 +4,8 @@ import {
   calculateCoinbasePremiumBasisPoints,
   createCoinbaseHeartbeatSubscription,
   createCoinbaseTickerSubscription,
+  getUsdMarketReconnectDelay,
+  getUsdMarketRestRefreshInterval,
   parseBinanceTradeMessage,
   parseCoinbaseTickerMessage,
   withLiveUsdMarketPrice,
@@ -11,6 +13,14 @@ import {
 } from "./usdRealtime";
 
 describe("Coinbase realtime BTC/USD", () => {
+  it("uses 60-second REST backup and 15-30-60 reconnect backoff", () => {
+    expect(getUsdMarketRestRefreshInterval(true)).toBe(60_000);
+    expect(getUsdMarketRestRefreshInterval(false)).toBe(60_000);
+    expect([0, 1, 2, 3, 20].map(getUsdMarketReconnectDelay)).toEqual([
+      15_000, 30_000, 60_000, 60_000, 60_000,
+    ]);
+  });
+
   it("subscribes to public BTC-USD ticker and heartbeat channels", () => {
     expect(JSON.parse(createCoinbaseTickerSubscription())).toEqual({
       type: "subscribe",

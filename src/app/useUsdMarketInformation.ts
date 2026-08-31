@@ -8,6 +8,7 @@ import { isRecord } from "../infrastructure/validation";
 import {
   createCoinbaseHeartbeatSubscription,
   createCoinbaseTickerSubscription,
+  getUsdMarketReconnectDelay,
   getUsdMarketRestRefreshDelay,
   getUsdMarketRestRefreshInterval,
   parseBinanceTradeMessage,
@@ -282,6 +283,7 @@ export function useUsdMarketInformation(enabled = true): {
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
     let renderTimer: number | undefined;
     let staleTimer: number | undefined;
     let lastRenderedAt = 0;
@@ -307,6 +309,7 @@ export function useUsdMarketInformation(enabled = true): {
     const disconnect = () => {
       clearTimers();
       queuedPrice = undefined;
+      reconnectAttempt = 0;
       setStreamActive(false);
       const activeSocket = socket;
       socket = undefined;
@@ -315,10 +318,9 @@ export function useUsdMarketInformation(enabled = true): {
     const scheduleReconnect = () => {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (disposed || !browserIsActive()) return;
-      reconnectTimer = window.setTimeout(
-        connect,
-        USD_REALTIME_MARKET_POLICY.reconnectDelayMs,
-      );
+      const delay = getUsdMarketReconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(connect, delay);
     };
     const checkStale = () => {
       staleTimer = undefined;
@@ -356,6 +358,7 @@ export function useUsdMarketInformation(enabled = true): {
         next = withLiveUsdPremiumReference(next, premiumReferenceRef.current);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;
+      reconnectAttempt = 0;
       setInformation(next, "live");
       setStreamActive(true);
       scheduleStaleCheck();
@@ -430,20 +433,21 @@ export function useUsdMarketInformation(enabled = true): {
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
 
     const browserIsActive = () =>
       document.visibilityState === "visible" && navigator.onLine !== false;
     const scheduleReconnect = () => {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (disposed || !browserIsActive()) return;
-      reconnectTimer = window.setTimeout(
-        connect,
-        USD_REALTIME_MARKET_POLICY.reconnectDelayMs,
-      );
+      const delay = getUsdMarketReconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(connect, delay);
     };
     const disconnect = () => {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
+      reconnectAttempt = 0;
       const activeSocket = socket;
       socket = undefined;
       activeSocket?.close();
@@ -459,6 +463,7 @@ export function useUsdMarketInformation(enabled = true): {
           void parseBinanceTradeMessage(event.data).then((reference) => {
             if (!reference || disposed || socket !== nextSocket) return;
             premiumReferenceRef.current = reference;
+            reconnectAttempt = 0;
             const current = informationRef.current;
             if (!current || current.snapshot.source !== "coinbase") return;
             setInformation(

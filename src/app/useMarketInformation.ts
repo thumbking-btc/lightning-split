@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PriceResponseDto } from "../api/contracts";
 import {
   createUpbitTradeSubscription,
+  getMarketReconnectDelay,
   getMarketRestRefreshDelay,
   getMarketRestRefreshInterval,
   parseUpbitTradeMessage,
@@ -186,6 +187,7 @@ export function useMarketInformation(enabled = true): {
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
     let renderTimer: number | undefined;
     let staleTimer: number | undefined;
     let lastRenderedAt = 0;
@@ -211,6 +213,7 @@ export function useMarketInformation(enabled = true): {
     const disconnect = () => {
       clearTimers();
       queuedPrice = undefined;
+      reconnectAttempt = 0;
       setStreamActive(false);
       const activeSocket = socket;
       socket = undefined;
@@ -250,6 +253,7 @@ export function useMarketInformation(enabled = true): {
       const next = withLiveMarketPrice(current, price);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;
+      reconnectAttempt = 0;
       setInformation(next, "live");
       setStreamActive(true);
       scheduleStaleCheck();
@@ -268,10 +272,9 @@ export function useMarketInformation(enabled = true): {
     const scheduleReconnect = () => {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (disposed || !browserIsActive()) return;
-      reconnectTimer = window.setTimeout(
-        connect,
-        REALTIME_MARKET_POLICY.reconnectDelayMs,
-      );
+      const delay = getMarketReconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(connect, delay);
     };
     const connect = () => {
       if (disposed || !browserIsActive() || socket) return;

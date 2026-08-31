@@ -8,9 +8,9 @@ export const USD_REALTIME_MARKET_POLICY = Object.freeze({
   binanceWebsocketUrl: "wss://data-stream.binance.vision:443/ws/btcusdt@trade",
   productId: "BTC-USD",
   liveRenderIntervalMs: 1_000,
-  reconnectDelayMs: 12_000,
+  reconnectDelaysMs: Object.freeze([15_000, 30_000, 60_000]),
   liveRestRefreshMs: 60_000,
-  fallbackRestRefreshMs: 16_000,
+  fallbackRestRefreshMs: 60_000,
   maximumLivePriceAgeMs: 2 * 60_000,
   maximumFutureClockSkewMs: 30_000,
 });
@@ -200,6 +200,15 @@ export function withLiveUsdMarketPrice(
         }
       : {}),
   });
+}
+
+export function getUsdMarketReconnectDelay(attempt: number): number {
+  const delays = USD_REALTIME_MARKET_POLICY.reconnectDelaysMs;
+  const index = Math.min(
+    Math.max(Number.isFinite(attempt) ? Math.trunc(attempt) : 0, 0),
+    delays.length - 1,
+  );
+  return delays[index]!;
 }
 
 export function getUsdMarketRestRefreshInterval(
