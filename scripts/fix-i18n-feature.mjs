@@ -70,6 +70,16 @@ await replaceInFile("src/App.tsx", [
       .finally(() => setRestoring(false));
   }, []);`,
   ],
+  [
+    `  const { market, refreshLockedSnapshot } = useMarketInformation();
+  const { market: usdMarket, refreshLockedSnapshot: refreshLockedUsdSnapshot } =
+    useUsdMarketInformation();
+  const [session, setSession] = useState<SettlementSession | null>(null);`,
+    `  const [session, setSession] = useState<SettlementSession | null>(null);
+  const { market, refreshLockedSnapshot } = useMarketInformation();
+  const { market: usdMarket, refreshLockedSnapshot: refreshLockedUsdSnapshot } =
+    useUsdMarketInformation(inputMode === "usd" || session?.inputMode === "usd");`,
+  ],
 ]);
 
 await replaceInFile("src/app/session.ts", [
