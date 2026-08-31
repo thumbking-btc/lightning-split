@@ -267,7 +267,7 @@ export function createGeneratingSession(
     ...(preview.payerShareKrw === null
       ? {}
       : { payerShareKrw: preview.payerShareKrw.toString() }),
-    ...(preview.payerShareUsdCents === null
+    ...(preview.payerShareUsdCents == null
       ? {}
       : { payerShareUsdCents: preview.payerShareUsdCents.toString() }),
     ...(preview.payerShareSats === null
