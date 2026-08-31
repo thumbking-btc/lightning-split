@@ -1,0 +1,69 @@
+name: Fix Safari preview and premium once
+
+on:
+  push:
+    branches:
+      - refactor/stateless-invoice-issuance
+    paths:
+      - .github/workflows/fix-safari-premium-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/stateless-invoice-issuance
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+      - run: npm ci
+      - name: Patch preview PWA, premium fallback, and copy
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('vite.config.ts')
+          s = p.read_text()
+          s = s.replace('registerType: "prompt",', 'registerType: previewBuild ? "autoUpdate" : "prompt",')
+          if 'cleanupOutdatedCaches: true,' not in s:
+              s = s.replace('workbox: {\n        globIgnores:', 'workbox: {\n        cleanupOutdatedCaches: true,\n        globIgnores:')
+          p.write_text(s)
+
+          p = Path('public/_headers')
+          s = p.read_text()
+          marker = '\n/sw.js\n'
+          block = '\n/\n  Cache-Control: no-store, max-age=0, must-revalidate\n\n/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate\n'
+          if '\n/index.html\n' not in s:
+              s = s.replace(marker, block + marker)
+          p.write_text(s)
+
+          p = Path('src/app/i18n.ts')
+          s = p.read_text()
+          s = s.replace('premiumUnavailable: "일시적으로 불러올 수 없음",', 'premiumUnavailable: "기준 시세 확인 불가",')
+          s = s.replace('premiumUnavailable: "Temporarily unavailable",', 'premiumUnavailable: "Reference price unavailable",')
+          p.write_text(s)
+
+          p = Path('src/pricing/usd.ts')
+          s = p.read_text()
+          old = '''  async fetchObservation(): Promise<UsdPremiumReferenceObservation> {\n    const response = await fetchBoundedJson(\n      "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",\n      this.policy.http,\n      this.fetcher,\n      this.clock,\n    );\n    if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {\n      throw new InfrastructureError(\n        "INVALID_RESPONSE",\n        "Binance BTC-USDT ticker is invalid.",\n      );\n    }\n    const retrievedAtMs = this.clock();\n    return Object.freeze({\n      priceUsdCents: parseUsdCents(\n        response.value.price,\n        "Binance BTC-USDT price",\n      ),\n      observedAtMs: retrievedAtMs,\n      retrievedAtMs,\n    });\n  }'''
+          new = '''  async fetchObservation(): Promise<UsdPremiumReferenceObservation> {\n    const errors: unknown[] = [];\n    for (const endpoint of [\n      "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",\n      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",\n      "https://api1.binance.com/api/v3/ticker/price?symbol=BTCUSDT",\n    ] as const) {\n      try {\n        const response = await fetchBoundedJson(\n          endpoint,\n          this.policy.http,\n          this.fetcher,\n          this.clock,\n        );\n        if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {\n          throw new InfrastructureError(\n            "INVALID_RESPONSE",\n            "Binance BTC-USDT ticker is invalid.",\n          );\n        }\n        const retrievedAtMs = this.clock();\n        return Object.freeze({\n          priceUsdCents: parseUsdCents(\n            response.value.price,\n            "Binance BTC-USDT price",\n          ),\n          observedAtMs: retrievedAtMs,\n          retrievedAtMs,\n        });\n      } catch (error) {\n        errors.push(error);\n      }\n    }\n    throw new AggregateError(\n      errors,\n      "No Binance BTC-USDT premium reference was available.",\n    );\n  }'''
+          if old not in s:
+              raise SystemExit('expected Binance adapter block not found')
+          p.write_text(s.replace(old, new))
+          PY
+      - name: Verify
+        run: npm run verify
+      - name: Commit fix and remove one-shot workflow
+        run: |
+          rm .github/workflows/fix-safari-premium-once.yml
+          git config user.name "qozm515"
+          git config user.email "46486213+qozm515@users.noreply.github.com"
+          git add vite.config.ts public/_headers src/app/i18n.ts src/pricing/usd.ts .github/workflows/fix-safari-premium-once.yml
+          git commit -m "Fix Safari preview updates and Coinbase premium reference"
+          git push origin HEAD:refactor/stateless-invoice-issuance
