@@ -94,7 +94,9 @@ export function CreatorContact() {
           </div>
           <nav
             className="creator-contact-links"
-            aria-label={korean ? "제작자 문의 채널" : "Creator contact channels"}
+            aria-label={
+              korean ? "제작자 문의 채널" : "Creator contact channels"
+            }
           >
             <a href={X_URL} target="_blank" rel="me noopener noreferrer">
               <span>X</span>

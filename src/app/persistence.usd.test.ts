@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { UsdPriceSnapshotDto } from "../api/contracts";
-import {
-  restoreSession,
-  serializeSession,
-} from "./persistence";
+import { restoreSession, serializeSession } from "./persistence";
 import {
   createGeneratingSession,
   createSettlementPreview,
