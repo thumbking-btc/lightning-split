@@ -88,7 +88,7 @@ export function sanitizeUsdInput(value: string): string {
 }
 
 export function usdInputToCents(value: string): string {
-  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/u.test(value)) return "";
+  if (!/^\d+(?:\.\d{0,2})?$/u.test(value)) return "";
   const [whole, fraction = ""] = value.split(".");
   const cents = BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"));
   return cents > 0n ? cents.toString() : "";
