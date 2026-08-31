@@ -29,6 +29,7 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('placeholder="0"');
+    expect(html).toContain('pattern="[0-9]*"');
     expect(html).toContain(">원</button>");
     expect(html).toContain(">달러</button>");
     expect(html).toContain(">sats</button>");
@@ -90,6 +91,7 @@ describe("v1 mobile accessibility states", () => {
     expect(html).toContain('class="preview-time-card"');
     expect(html).not.toContain('class="wide-preview-item"');
     expect(html).toContain("가격 확인 시각");
+    expect(html).toContain("사람별 원화 몫");
   });
 
   it("gives live market price and premium a clear non-technical status", () => {

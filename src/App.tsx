@@ -570,7 +570,14 @@ export function MarketSummary({
   const c = uiCopy(language);
   if (currency === "sats") {
     return (
-      <section className="market-summary" aria-label={c.currentMarket}>
+      <section
+        className="market-summary"
+        aria-label={
+          language === "ko"
+            ? "현재 비트코인 시장정보"
+            : "Current Bitcoin market information"
+        }
+      >
         <div className="market-summary-head">
           <span>{c.currentMarket}</span>
           <span className="market-status recent">Bitcoin</span>
@@ -593,7 +600,14 @@ export function MarketSummary({
   const error = usingUsd ? usdMarket?.error : market.error;
 
   return (
-    <section className="market-summary" aria-label={c.currentMarket}>
+    <section
+      className="market-summary"
+      aria-label={
+        language === "ko"
+          ? "현재 비트코인 시장정보"
+          : "Current Bitcoin market information"
+      }
+    >
       <div className="market-summary-head">
         <span>{c.currentMarket}</span>
         <span
@@ -744,6 +758,7 @@ export function AmountInput({
           id="amount"
           aria-label={c.totalAmount}
           inputMode={inputMode === "usd" ? "decimal" : "numeric"}
+          pattern={inputMode === "usd" ? "[0-9]*[.]?[0-9]*" : "[0-9]*"}
           value={totalAmount}
           placeholder={inputMode === "usd" ? "0.00" : "0"}
           onChange={(event) =>
@@ -815,7 +830,9 @@ export function SettlementPreviewDetails({
               </div>
             )}
             <div>
-              <span>{c.fiatSharePerPerson}</span>
+              <span>
+                {language === "ko" ? "사람별 원화 몫" : c.fiatSharePerPerson}
+              </span>
               <strong>
                 {formatAmountRange(
                   preview.invoiceShares,
@@ -1853,7 +1870,11 @@ export function App() {
         </div>
         {selectedSnapshot && inputMode !== "sats" && selectedPrice && (
           <p className="price-line">
-            {inputMode === "krw" ? "BTC/KRW" : "BTC/USD"}{" "}
+            {inputMode === "krw"
+              ? language === "ko"
+                ? "BTC 기준가격"
+                : "BTC/KRW"
+              : "BTC/USD"}{" "}
             <strong>{selectedPrice}</strong> ·{" "}
             {formatPriceTime(selectedSnapshot, language)}
           </p>
