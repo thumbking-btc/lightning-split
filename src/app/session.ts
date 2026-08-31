@@ -881,8 +881,7 @@ export function annotateSettledSlot(
   return {
     ...session,
     slots: session.slots.map((slot): ClientSlot =>
-      slot.slotNumber === slotNumber &&
-      (slot.status === "settled" || slot.status === "manuallyConfirmed")
+      slot.slotNumber === slotNumber
         ? {
             ...slot,
             annotation: {
