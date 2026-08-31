@@ -77,6 +77,14 @@ await replaceInFile("src/app/session.ts", [
     "  readonly payerShareUsdCents: bigint | null;",
     "  readonly payerShareUsdCents?: bigint | null;",
   ],
+  [
+    `    ...(preview.payerShareUsdCents === null
+      ? {}
+      : { payerShareUsdCents: preview.payerShareUsdCents.toString() }),`,
+    `    ...(preview.payerShareUsdCents == null
+      ? {}
+      : { payerShareUsdCents: preview.payerShareUsdCents.toString() }),`,
+  ],
 ]);
 
 await replaceInFile("src/lightning/settlement.ts", [
