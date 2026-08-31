@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { serializeBigIntDecimal } from "../api/serialization";
 import {
   archiveSettlementSession,
   clearSettlementHistory,
@@ -24,7 +25,7 @@ function session(id: string, createdAt: string): SettlementSession {
     overallNote: "저녁 식사",
     participantNameCandidates: ["민수"],
     priceSnapshot: {
-      priceKrw: "160000000",
+      priceKrw: serializeBigIntDecimal(160_000_000n),
       source: "upbit",
       market: "KRW-BTC",
       observedAt: createdAt,
