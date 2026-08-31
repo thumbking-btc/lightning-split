@@ -8,42 +8,48 @@
     {
       "name": "INVOICE_RATE_LIMITER",
       "namespace_id": "2026083101",
-      "simple": { "limit": 30, "period": 60 }
+      "simple": { "limit": 30, "period": 60 },
     },
     {
       "name": "SETTLEMENT_RATE_LIMITER",
       "namespace_id": "2026083102",
-      "simple": { "limit": 300, "period": 60 }
-    }
+      "simple": { "limit": 300, "period": 60 },
+    },
   ],
   "durable_objects": {
     "bindings": [
       {
         "name": "INVOICE_BATCHES",
-        "class_name": "InvoiceBatchCoordinator"
-      }
-    ]
+        "class_name": "InvoiceBatchCoordinator",
+      },
+    ],
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["InvoiceBatchCoordinator"]
-    }
+      "new_sqlite_classes": ["InvoiceBatchCoordinator"],
+    },
   ],
+  "exports": {
+    "InvoiceBatchCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*"],
   },
   "observability": {
     "enabled": true,
     "logs": {
       "enabled": true,
-      "head_sampling_rate": 1
+      "head_sampling_rate": 1,
     },
     "traces": {
       "enabled": true,
-      "head_sampling_rate": 0.01
-    }
-  }
+      "head_sampling_rate": 0.01,
+    },
+  },
 }
