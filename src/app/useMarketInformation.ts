@@ -128,6 +128,13 @@ export function useMarketInformation(enabled = true): {
   }, [refreshMarket]);
 
   useEffect(() => {
+    if (!enabled) return;
+    // Re-selecting a currency is a new active viewing session. Do not inherit
+    // the previous fallback polling delay; fetch once immediately instead.
+    lastRestRequestAtRef.current = 0;
+  }, [enabled]);
+
+  useEffect(() => {
     if (!enabled) return undefined;
     let disposed = false;
     let timer: number | undefined;
