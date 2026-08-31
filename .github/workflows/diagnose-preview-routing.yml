@@ -12,11 +12,12 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Preview endpoints
+      - name: Check Workers endpoints
         shell: bash
         run: |
           set -u
           for url in \
+            "https://lightning-split.thumbking-btc.workers.dev/" \
             "https://bfe6e928-lightning-split.thumbking-btc.workers.dev/" \
             "https://refactor-stateless-invoice-issuance-lightning-split.thumbking-btc.workers.dev/" \
             "https://preview-settlement-history-lightning-split.thumbking-btc.workers.dev/"
