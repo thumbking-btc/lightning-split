@@ -23,7 +23,7 @@ jobs:
           node-version: 22.13.1
           cache: npm
       - run: npm ci
-      - name: Patch preview PWA, premium fallback, and copy
+      - name: Patch preview PWA, premium fallback, copy, and test
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -49,6 +49,11 @@ jobs:
           s = s.replace('premiumUnavailable: "Temporarily unavailable",', 'premiumUnavailable: "Reference price unavailable",')
           p.write_text(s)
 
+          p = Path('src/App.test.tsx')
+          s = p.read_text()
+          s = s.replace('expect(html).toContain("일시적으로 불러올 수 없음");', 'expect(html).toContain("기준 시세 확인 불가");')
+          p.write_text(s)
+
           p = Path('src/pricing/usd.ts')
           s = p.read_text()
           old = '''  async fetchObservation(): Promise<UsdPremiumReferenceObservation> {\n    const response = await fetchBoundedJson(\n      "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",\n      this.policy.http,\n      this.fetcher,\n      this.clock,\n    );\n    if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {\n      throw new InfrastructureError(\n        "INVALID_RESPONSE",\n        "Binance BTC-USDT ticker is invalid.",\n      );\n    }\n    const retrievedAtMs = this.clock();\n    return Object.freeze({\n      priceUsdCents: parseUsdCents(\n        response.value.price,\n        "Binance BTC-USDT price",\n      ),\n      observedAtMs: retrievedAtMs,\n      retrievedAtMs,\n    });\n  }'''
@@ -64,6 +69,6 @@ jobs:
           rm .github/workflows/fix-safari-premium-once.yml
           git config user.name "qozm515"
           git config user.email "46486213+qozm515@users.noreply.github.com"
-          git add vite.config.ts public/_headers src/app/i18n.ts src/pricing/usd.ts .github/workflows/fix-safari-premium-once.yml
+          git add vite.config.ts public/_headers src/app/i18n.ts src/App.test.tsx src/pricing/usd.ts .github/workflows/fix-safari-premium-once.yml
           git commit -m "Fix Safari preview updates and Coinbase premium reference"
           git push origin HEAD:refactor/stateless-invoice-issuance
