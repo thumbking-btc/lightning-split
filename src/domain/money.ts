@@ -30,6 +30,11 @@ export interface KrwSplitPlan extends EqualSplitPlan {
   readonly targetSats: readonly bigint[];
 }
 
+export interface UsdSplitPlan extends EqualSplitPlan {
+  readonly payerShareUsdCents: bigint | null;
+  readonly targetSats: readonly bigint[];
+}
+
 export interface SatsSplitPlan extends EqualSplitPlan {
   readonly groupTotalSats: bigint;
   readonly payerShareSats: bigint | null;
@@ -38,6 +43,11 @@ export interface SatsSplitPlan extends EqualSplitPlan {
 export interface KrwPayerExcludedSplit {
   readonly invoiceShares: readonly bigint[];
   readonly payerShareKrw: bigint;
+}
+
+export interface UsdPayerExcludedSplit {
+  readonly invoiceShares: readonly bigint[];
+  readonly payerShareUsdCents: bigint;
 }
 
 function assertPeopleCount(people: number): void {
@@ -95,6 +105,32 @@ function assertPositiveInvoiceShares(invoiceShares: readonly bigint[]): void {
   }
 }
 
+function splitPayerExcluded(total: bigint, totalPeople: number): {
+  readonly invoiceShares: readonly bigint[];
+  readonly payerShare: bigint;
+} {
+  assertPeopleCount(totalPeople);
+  assertPositiveSafeAmount(total, "amount");
+
+  const divisor = BigInt(totalPeople);
+  const equalShare = total / divisor;
+  const remainder = total % divisor;
+  const invoiceShares = Array.from(
+    { length: totalPeople - 1 },
+    () => equalShare,
+  );
+  assertPositiveInvoiceShares(invoiceShares);
+  return { invoiceShares, payerShare: equalShare + remainder };
+}
+
+function fiatMinorToSats(amountMinor: bigint, btcPriceMinor: bigint): bigint {
+  assertPositiveSafeAmount(amountMinor, "amount");
+  assertPositiveSafeAmount(btcPriceMinor, "price");
+  const doubledNumerator = 2n * amountMinor * SATS_PER_BTC;
+  const doubledDenominator = 2n * btcPriceMinor;
+  return (doubledNumerator + btcPriceMinor) / doubledDenominator;
+}
+
 export function bigintFromSafeInteger(value: number, field = "amount"): bigint {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new MoneyValidationError(
@@ -112,33 +148,33 @@ export function splitKrw(
   totalKrw: bigint,
   totalPeople: number,
 ): KrwPayerExcludedSplit {
-  assertPeopleCount(totalPeople);
-  assertPositiveSafeAmount(totalKrw, "amount");
-
-  const divisor = BigInt(totalPeople);
-  const senderShareKrw = totalKrw / divisor;
-  const remainderKrw = totalKrw % divisor;
-  const invoiceShares = Array.from(
-    { length: totalPeople - 1 },
-    () => senderShareKrw,
-  );
-
-  assertPositiveInvoiceShares(invoiceShares);
-
+  const split = splitPayerExcluded(totalKrw, totalPeople);
   return {
-    invoiceShares,
-    payerShareKrw: senderShareKrw + remainderKrw,
+    invoiceShares: split.invoiceShares,
+    payerShareKrw: split.payerShare,
+  };
+}
+
+export function splitUsdCents(
+  totalUsdCents: bigint,
+  totalPeople: number,
+): UsdPayerExcludedSplit {
+  const split = splitPayerExcluded(totalUsdCents, totalPeople);
+  return {
+    invoiceShares: split.invoiceShares,
+    payerShareUsdCents: split.payerShare,
   };
 }
 
 export function krwToSats(krw: bigint, btcPriceKrw: bigint): bigint {
-  assertPositiveSafeAmount(krw, "amount");
-  assertPositiveSafeAmount(btcPriceKrw, "price");
+  return fiatMinorToSats(krw, btcPriceKrw);
+}
 
-  const doubledNumerator = 2n * krw * SATS_PER_BTC;
-  const doubledDenominator = 2n * btcPriceKrw;
-
-  return (doubledNumerator + btcPriceKrw) / doubledDenominator;
+export function usdCentsToSats(
+  usdCents: bigint,
+  btcPriceUsdCents: bigint,
+): bigint {
+  return fiatMinorToSats(usdCents, btcPriceUsdCents);
 }
 
 export function createKrwSplitPlan(
@@ -148,7 +184,6 @@ export function createKrwSplitPlan(
   btcPriceKrw: bigint,
 ): KrwSplitPlan {
   assertPositiveSafeAmount(btcPriceKrw, "price");
-
   assertPeopleCount(people);
   assertPositiveSafeAmount(totalKrw, "amount");
 
@@ -158,13 +193,11 @@ export function createKrwSplitPlan(
         invoiceShares: splitEvenly(totalKrw, people),
         payerShareKrw: null,
       };
-
   assertPositiveInvoiceShares(split.invoiceShares);
 
   const targetSats = split.invoiceShares.map((share) =>
     krwToSats(share, btcPriceKrw),
   );
-
   if (targetSats.some((amount) => amount === 0n)) {
     throw new MoneyValidationError(
       "ZERO_INVOICE_TARGET",
@@ -176,6 +209,42 @@ export function createKrwSplitPlan(
     invoiceShares: split.invoiceShares,
     invoiceCount: split.invoiceShares.length,
     payerShareKrw: split.payerShareKrw,
+    targetSats,
+  };
+}
+
+export function createUsdSplitPlan(
+  totalUsdCents: bigint,
+  people: number,
+  excludePayer: boolean,
+  btcPriceUsdCents: bigint,
+): UsdSplitPlan {
+  assertPositiveSafeAmount(btcPriceUsdCents, "price");
+  assertPeopleCount(people);
+  assertPositiveSafeAmount(totalUsdCents, "amount");
+
+  const split = excludePayer
+    ? splitUsdCents(totalUsdCents, people)
+    : {
+        invoiceShares: splitEvenly(totalUsdCents, people),
+        payerShareUsdCents: null,
+      };
+  assertPositiveInvoiceShares(split.invoiceShares);
+
+  const targetSats = split.invoiceShares.map((share) =>
+    usdCentsToSats(share, btcPriceUsdCents),
+  );
+  if (targetSats.some((amount) => amount === 0n)) {
+    throw new MoneyValidationError(
+      "ZERO_INVOICE_TARGET",
+      "환산된 각 결제 금액은 1 sat 이상이어야 합니다.",
+    );
+  }
+
+  return {
+    invoiceShares: split.invoiceShares,
+    invoiceCount: split.invoiceShares.length,
+    payerShareUsdCents: split.payerShareUsdCents,
     targetSats,
   };
 }
