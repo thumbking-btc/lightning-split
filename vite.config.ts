@@ -82,6 +82,7 @@ export default defineConfig({
         "apple-touch-icon.png",
       ],
       workbox: {
+        cleanupOutdatedCaches: true,
         globIgnores: ["**/build.json"],
       },
       manifest: {
