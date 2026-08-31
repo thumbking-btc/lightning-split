@@ -5,6 +5,7 @@ export type CurrencyPreference = InputMode;
 
 const LANGUAGE_KEY = "lightning-split:language";
 const CURRENCY_KEY = "lightning-split:currency";
+const LANGUAGE_EVENT = "lightning-split:language-change";
 
 function storage(): Storage | undefined {
   try {
@@ -39,6 +40,23 @@ export function saveLanguage(language: Language): void {
   } catch {
     // Preferences are optional; the app remains usable without localStorage.
   }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<Language>(LANGUAGE_EVENT, { detail: language }),
+    );
+  }
+}
+
+export function subscribeLanguage(
+  listener: (language: Language) => void,
+): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const handler = (event: Event) => {
+    if (!(event instanceof CustomEvent)) return;
+    if (event.detail === "ko" || event.detail === "en") listener(event.detail);
+  };
+  window.addEventListener(LANGUAGE_EVENT, handler);
+  return () => window.removeEventListener(LANGUAGE_EVENT, handler);
 }
 
 export function saveCurrency(currency: CurrencyPreference): void {
