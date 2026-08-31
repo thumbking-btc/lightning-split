@@ -824,7 +824,7 @@ export function SettlementPreviewDetails({
           </>
         ) : inputMode === "usd" ? (
           <>
-            {preview.payerShareUsdCents !== null && (
+            {preview.payerShareUsdCents != null && (
               <div>
                 <span>{c.payerFinalShare}</span>
                 <strong>

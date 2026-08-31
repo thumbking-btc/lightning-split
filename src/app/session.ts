@@ -41,7 +41,7 @@ export interface SettlementPreview {
   readonly targetSats: readonly bigint[];
   readonly invoiceCount: number;
   readonly payerShareKrw: bigint | null;
-  readonly payerShareUsdCents: bigint | null;
+  readonly payerShareUsdCents?: bigint | null;
   readonly payerShareSats: bigint | null;
 }
 
