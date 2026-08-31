@@ -270,7 +270,14 @@ export function useMarketInformation(enabled = true): {
       if (disposed || !browserIsActive() || socket) return;
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
-      const nextSocket = new WebSocket(REALTIME_MARKET_POLICY.websocketUrl);
+      let nextSocket: WebSocket;
+      try {
+        nextSocket = new WebSocket(REALTIME_MARKET_POLICY.websocketUrl);
+      } catch {
+        setStreamActive(false);
+        scheduleReconnect();
+        return;
+      }
       nextSocket.binaryType = "arraybuffer";
       socket = nextSocket;
       nextSocket.onopen = () => {

@@ -363,7 +363,14 @@ export function useUsdMarketInformation(enabled = true): {
       if (disposed || !browserIsActive() || socket) return;
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
-      const nextSocket = new WebSocket(USD_REALTIME_MARKET_POLICY.websocketUrl);
+      let nextSocket: WebSocket;
+      try {
+        nextSocket = new WebSocket(USD_REALTIME_MARKET_POLICY.websocketUrl);
+      } catch {
+        setStreamActive(false);
+        scheduleReconnect();
+        return;
+      }
       socket = nextSocket;
       nextSocket.onopen = () => {
         if (disposed || socket !== nextSocket || !browserIsActive()) return;
