@@ -72,7 +72,7 @@ export default defineConfig({
     react(),
     buildIdentityPlugin(),
     VitePWA({
-      registerType: "prompt",
+      registerType: previewBuild ? "autoUpdate" : "prompt",
       filename: "app-sw.js",
       includeAssets: [
         "lightning-split.jpg",

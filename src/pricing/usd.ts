@@ -259,27 +259,42 @@ export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAd
   ) {}
 
   async fetchObservation(): Promise<UsdPremiumReferenceObservation> {
-    const response = await fetchBoundedJson(
+    const errors: unknown[] = [];
+    for (const endpoint of [
       "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
-      this.policy.http,
-      this.fetcher,
-      this.clock,
-    );
-    if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {
-      throw new InfrastructureError(
-        "INVALID_RESPONSE",
-        "Binance BTC-USDT ticker is invalid.",
-      );
+      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+      "https://api1.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+    ] as const) {
+      try {
+        const response = await fetchBoundedJson(
+          endpoint,
+          this.policy.http,
+          this.fetcher,
+          this.clock,
+        );
+        if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {
+          throw new InfrastructureError(
+            "INVALID_RESPONSE",
+            "Binance BTC-USDT ticker is invalid.",
+          );
+        }
+        const retrievedAtMs = this.clock();
+        return Object.freeze({
+          priceUsdCents: parseUsdCents(
+            response.value.price,
+            "Binance BTC-USDT price",
+          ),
+          observedAtMs: retrievedAtMs,
+          retrievedAtMs,
+        });
+      } catch (error) {
+        errors.push(error);
+      }
     }
-    const retrievedAtMs = this.clock();
-    return Object.freeze({
-      priceUsdCents: parseUsdCents(
-        response.value.price,
-        "Binance BTC-USDT price",
-      ),
-      observedAtMs: retrievedAtMs,
-      retrievedAtMs,
-    });
+    throw new AggregateError(
+      errors,
+      "No Binance BTC-USDT premium reference was available.",
+    );
   }
 }
 

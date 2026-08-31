@@ -140,7 +140,7 @@ describe("v1 mobile accessibility states", () => {
         }}
       />,
     );
-    expect(html).toContain("일시적으로 불러올 수 없음");
+    expect(html).toContain("기준 시세 확인 불가");
     expect(html).not.toContain("정보 없음");
   });
 
