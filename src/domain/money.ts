@@ -105,7 +105,10 @@ function assertPositiveInvoiceShares(invoiceShares: readonly bigint[]): void {
   }
 }
 
-function splitPayerExcluded(total: bigint, totalPeople: number): {
+function splitPayerExcluded(
+  total: bigint,
+  totalPeople: number,
+): {
   readonly invoiceShares: readonly bigint[];
   readonly payerShare: bigint;
 } {

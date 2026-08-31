@@ -177,6 +177,4 @@ export interface SatsSettlementBatch extends SettlementBatchBase {
 }
 
 export type SettlementBatch =
-  | KrwSettlementBatch
-  | UsdSettlementBatch
-  | SatsSettlementBatch;
+  KrwSettlementBatch | UsdSettlementBatch | SatsSettlementBatch;

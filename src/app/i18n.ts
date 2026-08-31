@@ -73,8 +73,7 @@ const KO = {
     "이름은 이 기기의 정산 화면에만 저장되며 결제 QR이나 라이트닝 네트워크에는 포함되지 않습니다.",
   copyPaymentRequest: "결제 요청 복사",
   copied: "결제 요청을 복사했습니다.",
-  copyFailed:
-    "자동 복사에 실패했습니다. 결제 요청을 길게 눌러 복사하십시오.",
+  copyFailed: "자동 복사에 실패했습니다. 결제 요청을 길게 눌러 복사하십시오.",
   autoVerifyDelayed: "자동 확인 지연",
   autoVerifyDelayedHelp: "받는 지갑에서 직접 확인해 완료할 수 있습니다.",
   autoVerifying: "자동 확인 중",
@@ -176,7 +175,8 @@ const EN: Record<keyof typeof KO, string> = {
   totalSatsToReceive: "Total sats to receive",
   priceCheckedAt: "Price checked at",
   priceRefresh: "Refresh price",
-  priceLockedNote: "The BTC reference price is refreshed and locked when settlement starts.",
+  priceLockedNote:
+    "The BTC reference price is refreshed and locked when settlement starts.",
   splitPayerRemainder:
     "The shared cost is divided by the number of people. Any indivisible remainder is assigned to the settler.",
   splitFrontRemainder:
@@ -187,7 +187,8 @@ const EN: Record<keyof typeof KO, string> = {
   privacy: "No account, custody, or permanent server storage.",
   heroLine1: "Split the bill.",
   heroLine2: "Settle with Lightning.",
-  heroDescription: "Choose an amount and group size to create Lightning payment QRs.",
+  heroDescription:
+    "Choose an amount and group size to create Lightning payment QRs.",
   payerPaid: "I paid the full amount",
   payerPaidHelp: "Create QRs only for the other participants",
   includeMe: "Includes me",
@@ -219,18 +220,22 @@ const EN: Record<keyof typeof KO, string> = {
     "The name is stored only in this device's settlement view and is not included in the payment QR or Lightning network.",
   copyPaymentRequest: "Copy payment request",
   copied: "Payment request copied.",
-  copyFailed: "Automatic copy failed. Press and hold the payment request to copy it.",
+  copyFailed:
+    "Automatic copy failed. Press and hold the payment request to copy it.",
   autoVerifyDelayed: "Automatic verification delayed",
-  autoVerifyDelayedHelp: "You can verify it in the receiving wallet and mark it complete.",
+  autoVerifyDelayedHelp:
+    "You can verify it in the receiving wallet and mark it complete.",
   autoVerifying: "Automatic verification",
-  autoVerifyingHelp: "This payment will complete automatically when the deposit is verified.",
+  autoVerifyingHelp:
+    "This payment will complete automatically when the deposit is verified.",
   manualRequired: "Manual verification required",
   manualRequiredHelp:
     "Automatic verification is not available for this payment. Verify the deposit in the receiving wallet.",
   manualFinish: "Verify manually and mark complete",
   safeGenerating: "Securely checking the payment request.",
   safeSaving: "Securely saving the payment request on this device.",
-  finalVerifying: "Running a final check for a payment made just before expiry.",
+  finalVerifying:
+    "Running a final check for a payment made just before expiry.",
   markPaid: "Mark payment complete",
   invoiceSaveFailed: "Could not safely save the payment request.",
   invoiceCreateFailed: "Could not create the payment request.",
@@ -240,7 +245,8 @@ const EN: Record<keyof typeof KO, string> = {
     "This address requires sender information that is not supported by the current input.",
   unsupportedFlowHelp:
     "This address requires an additional post-payment action and cannot be offered safely in the current flow.",
-  otherPaymentsPreserved: "Successful results for the other payments are preserved.",
+  otherPaymentsPreserved:
+    "Successful results for the other payments are preserved.",
   retrying: "Recreating…",
   retryThis: "Retry only this payment",
   qrExpired: "This QR has expired.",
@@ -250,8 +256,10 @@ const EN: Record<keyof typeof KO, string> = {
   legacyReviewHelp:
     "This older completion record does not contain enough evidence to identify how it was confirmed. Verify it in the receiving wallet.",
   confirmAndFinish: "Verify and mark complete",
-  confirmInWallet: "Verify the deposit in the receiving wallet, then mark it complete.",
-  manuallyMarked: "Marked complete after manual verification in the receiving wallet.",
+  confirmInWallet:
+    "Verify the deposit in the receiving wallet, then mark it complete.",
+  manuallyMarked:
+    "Marked complete after manual verification in the receiving wallet.",
   undoManual: "Undo completion mark",
   autoConfirmed: "Automatically confirmed",
   previousRecord: "Previous confirmation record",
@@ -262,7 +270,8 @@ const EN: Record<keyof typeof KO, string> = {
   savingRequest: "Saving payment request",
   waitingAuto: "Waiting for payment · automatic verification",
   waitingManual: "Waiting for payment · manual verification required",
-  delayedManual: "Automatic verification delayed · manual verification available",
+  delayedManual:
+    "Automatic verification delayed · manual verification available",
   generatingRequest: "Creating payment request",
   finalCheck: "Final payment verification",
   providerForwarded:
@@ -287,7 +296,8 @@ const EN: Record<keyof typeof KO, string> = {
   undoManualQuestion:
     "Undo the manual completion mark and return this payment to waiting status? This does not reverse a payment that was actually received.",
   pasted: "Lightning Address pasted.",
-  pasteUnavailable: "Automatic paste is unavailable. Press and hold the field to paste manually.",
+  pasteUnavailable:
+    "Automatic paste is unavailable. Press and hold the field to paste manually.",
 };
 
 export type UiCopy = typeof KO;

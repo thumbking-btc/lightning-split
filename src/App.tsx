@@ -103,9 +103,7 @@ function formatPriceTime(
   );
   if (language === "ko")
     return seconds < 60 ? "방금 전" : `${Math.floor(seconds / 60)}분 전`;
-  return seconds < 60
-    ? "just now"
-    : `${Math.floor(seconds / 60)} min ago`;
+  return seconds < 60 ? "just now" : `${Math.floor(seconds / 60)} min ago`;
 }
 
 function formatPremium(basisPoints: string): string {
@@ -299,9 +297,7 @@ export function InvoiceCard({
       <div className="card-head">
         <div>
           <span className="slot-number">
-            {language === "ko"
-              ? `${slot.slotNumber}번`
-              : `#${slot.slotNumber}`}
+            {language === "ko" ? `${slot.slotNumber}번` : `#${slot.slotNumber}`}
           </span>
           <strong>{primaryAmount}</strong>
         </div>
@@ -324,7 +320,9 @@ export function InvoiceCard({
           {c.participantForPayment} <span>{c.optional}</span>
           <input
             value={slot.annotation?.displayName ?? ""}
-            onChange={(event) => onAnnotate(slot.slotNumber, event.target.value)}
+            onChange={(event) =>
+              onAnnotate(slot.slotNumber, event.target.value)
+            }
             placeholder={c.participantPlaceholderShort}
           />
         </label>
@@ -606,7 +604,11 @@ export function MarketSummary({
             {information
               ? usingUsd
                 ? formatUsdCents(
-                    BigInt((information as UsdMarketInformationState["information"] extends infer T ? never : never) ?? 0),
+                    BigInt(
+                      (information as UsdMarketInformationState["information"] extends infer T
+                        ? never
+                        : never) ?? 0,
+                    ),
                     language,
                   )
                 : ""
@@ -689,8 +691,16 @@ export function AmountInput({
   readonly onTotalAmountChange: (amount: string) => void;
 }) {
   const c = uiCopy(language);
-  const sanitize = inputMode === "usd" ? sanitizeUsdInput : sanitizeIntegerInput;
-  const unit = inputMode === "krw" ? (language === "ko" ? "원" : "KRW") : inputMode === "usd" ? "USD" : "sats";
+  const sanitize =
+    inputMode === "usd" ? sanitizeUsdInput : sanitizeIntegerInput;
+  const unit =
+    inputMode === "krw"
+      ? language === "ko"
+        ? "원"
+        : "KRW"
+      : inputMode === "usd"
+        ? "USD"
+        : "sats";
   return (
     <>
       <div className="field-head">
@@ -729,7 +739,9 @@ export function AmountInput({
           inputMode={inputMode === "usd" ? "decimal" : "numeric"}
           value={totalAmount}
           placeholder={inputMode === "usd" ? "0.00" : "0"}
-          onChange={(event) => onTotalAmountChange(sanitize(event.target.value))}
+          onChange={(event) =>
+            onTotalAmountChange(sanitize(event.target.value))
+          }
         />
         <span>{unit}</span>
       </div>
@@ -893,10 +905,8 @@ export function App() {
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
   const { market, refreshLockedSnapshot } = useMarketInformation();
-  const {
-    market: usdMarket,
-    refreshLockedSnapshot: refreshLockedUsdSnapshot,
-  } = useUsdMarketInformation();
+  const { market: usdMarket, refreshLockedSnapshot: refreshLockedUsdSnapshot } =
+    useUsdMarketInformation();
   const [session, setSession] = useState<SettlementSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [retryingSlot, setRetryingSlot] = useState<number>();
@@ -1572,9 +1582,9 @@ export function App() {
                 language,
               )}{" "}
               ·{" "}
-              {new Date(
-                session.usdPriceSnapshot.snapshotAt,
-              ).toLocaleTimeString(localeFor(language))}
+              {new Date(session.usdPriceSnapshot.snapshotAt).toLocaleTimeString(
+                localeFor(language),
+              )}
             </small>
           )}
         </section>
@@ -1660,7 +1670,8 @@ export function App() {
         : undefined;
   const selectedSnapshot =
     inputMode === "krw" ? priceSnapshot : usdPriceSnapshot;
-  const selectedMarketError = inputMode === "usd" ? usdMarket.error : market.error;
+  const selectedMarketError =
+    inputMode === "usd" ? usdMarket.error : market.error;
 
   return (
     <main className="app-shell">
@@ -1819,9 +1830,9 @@ export function App() {
               className="text-button touch-target"
               type="button"
               onClick={() =>
-                void (inputMode === "krw" ? refreshPrice() : refreshUsdPrice()).catch(
-                  () => undefined,
-                )
+                void (
+                  inputMode === "krw" ? refreshPrice() : refreshUsdPrice()
+                ).catch(() => undefined)
               }
             >
               {c.priceRefresh}

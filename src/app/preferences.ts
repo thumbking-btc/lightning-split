@@ -62,7 +62,10 @@ export function sanitizeUsdInput(value: string): string {
   const dot = normalized.indexOf(".");
   if (dot < 0) return normalized;
   const whole = normalized.slice(0, dot);
-  const fraction = normalized.slice(dot + 1).replace(/\./gu, "").slice(0, 2);
+  const fraction = normalized
+    .slice(dot + 1)
+    .replace(/\./gu, "")
+    .slice(0, 2);
   return `${whole || "0"}.${fraction}`;
 }
 

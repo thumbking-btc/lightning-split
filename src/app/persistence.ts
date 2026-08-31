@@ -428,7 +428,8 @@ function assertSession(value: unknown): SettlementSession {
       value.payerShareUsdCents !== undefined ||
       value.payerShareSats !== undefined ||
       value.slots.some(
-        (slot) => slot.krwShare === undefined || slot.usdCentsShare !== undefined,
+        (slot) =>
+          slot.krwShare === undefined || slot.usdCentsShare !== undefined,
       )
     ) {
       throw new Error("저장된 원화 정산 형식이 올바르지 않습니다.");
@@ -457,7 +458,8 @@ function assertSession(value: unknown): SettlementSession {
       value.payerShareKrw !== undefined ||
       value.payerShareSats !== undefined ||
       value.slots.some(
-        (slot) => slot.usdCentsShare === undefined || slot.krwShare !== undefined,
+        (slot) =>
+          slot.usdCentsShare === undefined || slot.krwShare !== undefined,
       )
     ) {
       throw new Error("저장된 달러 정산 형식이 올바르지 않습니다.");

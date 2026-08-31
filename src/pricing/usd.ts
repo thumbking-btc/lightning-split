@@ -75,7 +75,10 @@ export class NoopUsdPremiumReferenceCache implements UsdPremiumReferenceCache {
 
 function parseUsdCents(value: unknown, field: string): bigint {
   const text = typeof value === "number" ? String(value) : value;
-  if (typeof text !== "string" || !/^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/u.test(text)) {
+  if (
+    typeof text !== "string" ||
+    !/^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/u.test(text)
+  ) {
     throw new InfrastructureError("INVALID_RESPONSE", `${field} is invalid.`);
   }
   const [whole, fraction = ""] = text.split(".");
@@ -83,7 +86,10 @@ function parseUsdCents(value: unknown, field: string): bigint {
   let cents = BigInt(whole!) * 100n + BigInt(padded.slice(0, 2));
   if (Number(padded[2] ?? "0") >= 5) cents += 1n;
   if (cents < 1n || cents > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new InfrastructureError("INVALID_RESPONSE", `${field} is out of range.`);
+    throw new InfrastructureError(
+      "INVALID_RESPONSE",
+      `${field} is out of range.`,
+    );
   }
   return cents;
 }
@@ -112,14 +118,22 @@ function assertFresh(
     );
   }
   if (nowMs - observedAtMs > policy.maxObservationAgeMs) {
-    throw new InfrastructureError("STALE_DATA", "The BTC/USD observation is stale.", {
-      retryable: true,
-    });
+    throw new InfrastructureError(
+      "STALE_DATA",
+      "The BTC/USD observation is stale.",
+      {
+        retryable: true,
+      },
+    );
   }
   if (nowMs - retrievedAtMs > policy.maxRetrievalAgeMs) {
-    throw new InfrastructureError("STALE_DATA", "The BTC/USD retrieval is stale.", {
-      retryable: true,
-    });
+    throw new InfrastructureError(
+      "STALE_DATA",
+      "The BTC/USD retrieval is stale.",
+      {
+        retryable: true,
+      },
+    );
   }
 }
 
@@ -167,7 +181,10 @@ export class CoinbaseUsdPriceAdapter implements UsdPriceSourceAdapter {
     return Object.freeze({
       source: this.source,
       market: "BTC-USD",
-      priceUsdCents: parseUsdCents(response.value.price, "Coinbase BTC-USD price"),
+      priceUsdCents: parseUsdCents(
+        response.value.price,
+        "Coinbase BTC-USD price",
+      ),
       observedAtMs,
       retrievedAtMs,
     });
@@ -202,7 +219,11 @@ export class KrakenUsdPriceAdapter implements UsdPriceSourceAdapter {
       );
     }
     const entries = Object.values(response.value.result);
-    if (entries.length !== 1 || !isRecord(entries[0]) || !Array.isArray(entries[0].c)) {
+    if (
+      entries.length !== 1 ||
+      !isRecord(entries[0]) ||
+      !Array.isArray(entries[0].c)
+    ) {
       throw new InfrastructureError(
         "INVALID_RESPONSE",
         "Kraken BTC-USD ticker is invalid.",
@@ -341,7 +362,8 @@ export class CoinbasePremiumService {
     }
     if (
       !reference ||
-      nowMs - Date.parse(reference.retrievedAt) > USD_PREMIUM_REFERENCE_CACHE_TTL_MS ||
+      nowMs - Date.parse(reference.retrievedAt) >
+        USD_PREMIUM_REFERENCE_CACHE_TTL_MS ||
       nowMs - Date.parse(reference.observedAt) > this.policy.maxObservationAgeMs
     ) {
       const observation = await this.referenceAdapter.fetchObservation();

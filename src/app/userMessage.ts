@@ -28,10 +28,12 @@ const ERROR_MESSAGES_EN: Readonly<Record<string, string>> = Object.freeze({
   INVALID_INPUT: "Check the information you entered.",
   TIMEOUT: "The response is taking too long. Try again shortly.",
   NETWORK_ERROR: "Check your network connection and try again.",
-  HTTP_ERROR: "An external service is temporarily unavailable. Try again shortly.",
+  HTTP_ERROR:
+    "An external service is temporarily unavailable. Try again shortly.",
   RATE_LIMITED: "Too many requests. Try again shortly.",
   PROVIDER_REJECTED: "The Lightning service rejected the request.",
-  AMOUNT_OUT_OF_RANGE: "The amount is outside the range accepted by this address.",
+  AMOUNT_OUT_OF_RANGE:
+    "The amount is outside the range accepted by this address.",
   PAYER_DATA_REQUIRED:
     "Addresses that require additional payer information are not supported yet.",
   COMMENT_TOO_LONG:
@@ -71,5 +73,7 @@ export function toUserMessage(
     }
     return message;
   }
-  return cause instanceof Error && cause.message ? cause.message : fallbackMessage;
+  return cause instanceof Error && cause.message
+    ? cause.message
+    : fallbackMessage;
 }

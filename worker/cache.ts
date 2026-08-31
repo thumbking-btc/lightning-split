@@ -137,9 +137,7 @@ export class WorkerUsdPriceSnapshotCache implements UsdPriceSnapshotCache {
   }
 }
 
-export class WorkerUsdPremiumReferenceCache
-  implements UsdPremiumReferenceCache
-{
+export class WorkerUsdPremiumReferenceCache implements UsdPremiumReferenceCache {
   constructor(private readonly cache: Cache = caches.default) {}
 
   async get(): Promise<UsdPremiumReference | null> {
