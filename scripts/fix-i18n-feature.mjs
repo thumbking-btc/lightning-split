@@ -34,6 +34,42 @@ await replaceInFile("src/App.tsx", [
               : c.checking}`,
   ],
   ["preview.payerShareUsdCents !== null", "preview.payerShareUsdCents != null"],
+  [
+    `  const retryOperationRef = useRef<string | undefined>(undefined);
+  const c = uiCopy(language);`,
+    `  const retryOperationRef = useRef<string | undefined>(undefined);
+  const languageRef = useRef(language);
+  const c = uiCopy(language);`,
+  ],
+  [
+    `  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);`,
+    `  useEffect(() => {
+    languageRef.current = language;
+    document.documentElement.lang = language;
+  }, [language]);`,
+  ],
+  [
+    `      .catch(() =>
+        setPersistenceError(
+          language === "ko"
+            ? "저장된 정산을 불러오지 못했습니다. 이 브라우저에서는 자동 복구가 제한될 수 있습니다."
+            : "Could not load the saved settlement. Automatic recovery may be limited in this browser.",
+        ),
+      )
+      .finally(() => setRestoring(false));
+  }, [language]);`,
+    `      .catch(() =>
+        setPersistenceError(
+          languageRef.current === "ko"
+            ? "저장된 정산을 불러오지 못했습니다. 이 브라우저에서는 자동 복구가 제한될 수 있습니다."
+            : "Could not load the saved settlement. Automatic recovery may be limited in this browser.",
+        ),
+      )
+      .finally(() => setRestoring(false));
+  }, []);`,
+  ],
 ]);
 
 await replaceInFile("src/app/session.ts", [
