@@ -45,11 +45,31 @@ function failureSlot(
   error: unknown,
 ): FailedInvoiceSlot {
   const known = error instanceof InfrastructureError;
+  const issuanceResultUnknown =
+    known &&
+    new Set([
+      "TIMEOUT",
+      "NETWORK_ERROR",
+      "HTTP_ERROR",
+      "RESPONSE_TOO_LARGE",
+      "INVALID_RESPONSE",
+    ]).has(error.code);
+  if (issuanceResultUnknown) {
+    return {
+      ...slot,
+      status: "failed",
+      failure: {
+        code: "ISSUANCE_UNKNOWN",
+        message:
+          "The provider callback result is unknown. Check the receiving wallet before creating another payment request.",
+        retryable: false,
+      },
+    };
+  }
   const canRetryWithFreshProviderState =
     known &&
     new Set([
       "PROVIDER_REJECTED",
-      "INVALID_RESPONSE",
       "INVALID_BOLT11",
       "DUPLICATE_PAYMENT_HASH",
       "BATCH_ABORTED",
