@@ -78,7 +78,7 @@ export function completeMarketRefresh(
   return next;
 }
 
-export function useMarketInformation(): {
+export function useMarketInformation(enabled = true): {
   readonly market: MarketInformationState;
   readonly refreshLockedSnapshot: () => Promise<PriceResponseDto>;
 } {
@@ -128,6 +128,7 @@ export function useMarketInformation(): {
   }, [refreshMarket]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let disposed = false;
     let timer: number | undefined;
     const clearTimer = () => {
@@ -171,9 +172,10 @@ export function useMarketInformation(): {
       clearTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [livePriceActive, refreshMarket]);
+  }, [enabled, livePriceActive, refreshMarket]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
@@ -311,7 +313,7 @@ export function useMarketInformation(): {
       window.removeEventListener("offline", handleOffline);
       disconnect();
     };
-  }, [setInformation]);
+  }, [enabled, setInformation]);
 
   return { market, refreshLockedSnapshot };
 }

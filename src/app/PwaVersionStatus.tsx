@@ -11,6 +11,7 @@ import { useLanguagePreference } from "./useLanguagePreference";
 
 declare const __APP_VERSION__: string;
 declare const __GIT_COMMIT__: string;
+declare const __APP_BRANCH__: string;
 
 export function PwaVersionStatus() {
   const language = useLanguagePreference();
@@ -57,7 +58,7 @@ export function PwaVersionStatus() {
 
   return (
     <div className="app-version" role="status" aria-live="polite">
-      {__APP_VERSION__} · {__GIT_COMMIT__} ·{" "}
+      {__APP_VERSION__} · {__APP_BRANCH__} · {__GIT_COMMIT__} ·{" "}
       {updateAvailable
         ? korean
           ? "새 버전 사용 가능"

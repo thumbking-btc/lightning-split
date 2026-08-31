@@ -33,7 +33,7 @@ describe("BTC/USD Worker API", () => {
     ]);
   });
 
-  it("returns Coinbase BTC/USD with a Kraken premium reference", async () => {
+  it("returns Coinbase BTC/USD with a Binance BTC-USDT premium reference", async () => {
     network.use(
       http.get(
         "https://api.exchange.coinbase.com/products/BTC-USD/ticker",
@@ -43,12 +43,10 @@ describe("BTC/USD Worker API", () => {
             time: new Date(Date.now() - 1_000).toISOString(),
           }),
       ),
-      http.get("https://api.kraken.com/0/public/Ticker", () =>
-        HttpResponse.json({
-          error: [],
-          result: { XXBTZUSD: { c: ["100000.00", "0.1"] } },
-        }),
-      ),
+      http.get("https://api.binance.com/api/v3/ticker/price", ({ request }) => {
+        expect(new URL(request.url).searchParams.get("symbol")).toBe("BTCUSDT");
+        return HttpResponse.json({ symbol: "BTCUSDT", price: "100000.00" });
+      }),
     );
 
     const response = await worker.fetch(priceRequest(), TEST_ENV);

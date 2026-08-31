@@ -7,6 +7,7 @@ import packageJson from "./package.json" with { type: "json" };
 
 function resolveGitCommit(): string {
   const environmentCommit =
+    process.env.WORKERS_CI_COMMIT_SHA ??
     process.env.GITHUB_SHA ??
     process.env.CLOUDFLARE_COMMIT_SHA ??
     process.env.CF_PAGES_COMMIT_SHA;
@@ -20,8 +21,29 @@ function resolveGitCommit(): string {
   }
 }
 
-const appVersion = `v${packageJson.version}`;
+function resolveGitBranch(): string {
+  const environmentBranch =
+    process.env.WORKERS_CI_BRANCH ??
+    process.env.GITHUB_REF_NAME ??
+    process.env.CF_PAGES_BRANCH;
+  if (environmentBranch) return environmentBranch;
+  try {
+    return (
+      execFileSync("git", ["branch", "--show-current"], {
+        encoding: "utf8",
+      }).trim() || "local"
+    );
+  } catch {
+    return "unknown";
+  }
+}
+
 const gitCommit = resolveGitCommit();
+const gitBranch = resolveGitBranch();
+const previewBuild = !["main", "local", "unknown"].includes(gitBranch);
+const appVersion = `v${packageJson.version}${
+  previewBuild ? `-preview.${gitCommit}` : ""
+}`;
 
 function buildIdentityPlugin(): Plugin {
   return {
@@ -30,7 +52,11 @@ function buildIdentityPlugin(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: "build.json",
-        source: `${JSON.stringify({ version: appVersion, commit: gitCommit })}\n`,
+        source: `${JSON.stringify({
+          version: appVersion,
+          commit: gitCommit,
+          branch: gitBranch,
+        })}\n`,
       });
     },
   };
@@ -40,6 +66,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __GIT_COMMIT__: JSON.stringify(gitCommit),
+    __APP_BRANCH__: JSON.stringify(gitBranch),
   },
   plugins: [
     react(),

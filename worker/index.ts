@@ -23,6 +23,7 @@ import {
   UpbitPriceAdapter,
 } from "../src/pricing/service";
 import {
+  BinanceUsdtPremiumReferenceAdapter,
   CoinbasePremiumService,
   CoinbaseUsdPriceAdapter,
   KrakenUsdPriceAdapter,
@@ -173,7 +174,7 @@ async function handleUsdPrice(): Promise<Response> {
   const premium =
     snapshot.source === "coinbase"
       ? await new CoinbasePremiumService(
-          kraken,
+          new BinanceUsdtPremiumReferenceAdapter(),
           new WorkerUsdPremiumReferenceCache(),
         )
           .getInformation(snapshot.priceUsdCents)

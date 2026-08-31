@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Fetcher } from "../infrastructure/http";
 import {
+  BinanceUsdtPremiumReferenceAdapter,
   CoinbasePremiumService,
   CoinbaseUsdPriceAdapter,
   KrakenUsdPriceAdapter,
   UsdPriceSnapshotService,
   type UsdPremiumReference,
+  type UsdPremiumReferenceAdapter,
   type UsdPremiumReferenceCache,
+  type UsdPremiumReferenceObservation,
   type UsdPriceObservation,
   type UsdPriceSnapshot,
   type UsdPriceSnapshotCache,
@@ -59,6 +62,18 @@ function fakeAdapter(
 ): UsdPriceSourceAdapter {
   return {
     source,
+    fetchObservation: vi.fn(() =>
+      observation instanceof Error
+        ? Promise.reject(observation)
+        : Promise.resolve(observation),
+    ),
+  };
+}
+
+function fakePremiumReference(
+  observation: UsdPremiumReferenceObservation | Error,
+): UsdPremiumReferenceAdapter {
+  return {
     fetchObservation: vi.fn(() =>
       observation instanceof Error
         ? Promise.reject(observation)
@@ -130,6 +145,23 @@ describe("BTC/USD provider adapters", () => {
     expect(observation.source).toBe("kraken");
     expect(observation.observedAtMs).toBe(NOW);
   });
+
+  it("parses Binance BTC-USDT as the Coinbase Premium reference", async () => {
+    const fetcher: Fetcher = vi.fn(() =>
+      Promise.resolve(jsonResponse({ symbol: "BTCUSDT", price: "100000.005" })),
+    );
+    const observation = await new BinanceUsdtPremiumReferenceAdapter(
+      fetcher,
+      undefined,
+      () => NOW,
+    ).fetchObservation();
+
+    expect(observation).toEqual({
+      priceUsdCents: 10_000_001n,
+      observedAtMs: NOW,
+      retrievedAtMs: NOW,
+    });
+  });
 });
 
 describe("BTC/USD snapshot service", () => {
@@ -189,9 +221,7 @@ describe("BTC/USD snapshot service", () => {
 
 describe("Coinbase Premium information", () => {
   it("calculates positive and negative basis points against the reference", async () => {
-    const reference = fakeAdapter("kraken", {
-      source: "kraken",
-      market: "BTC-USD",
+    const reference = fakePremiumReference({
       priceUsdCents: 10_000_000n,
       observedAtMs: NOW,
       retrievedAtMs: NOW,

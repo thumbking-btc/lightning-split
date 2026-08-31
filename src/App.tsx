@@ -270,6 +270,7 @@ export function InvoiceCard({
 }) {
   const c = uiCopy(language);
   const status = slotStatus(slot, language);
+  const statusLines = status.label.split(" · ");
   const [copyFeedback, setCopyFeedback] = useState<string>();
 
   const copyInvoice = async () => {
@@ -306,7 +307,12 @@ export function InvoiceCard({
           role="status"
           aria-live="polite"
         >
-          {status.label}
+          {statusLines.map((line, index) => (
+            <span className="status-line" key={`${index}-${line}`}>
+              {line}
+              {index === 0 && statusLines.length > 1 ? " ·" : ""}
+            </span>
+          ))}
         </span>
       </div>
       {hasFiatShare && (
@@ -903,11 +909,12 @@ export function App() {
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
   const [session, setSession] = useState<SettlementSession | null>(null);
-  const { market, refreshLockedSnapshot } = useMarketInformation();
+  const krwMarketEnabled = inputMode === "krw" || session?.inputMode === "krw";
+  const usdMarketEnabled = inputMode === "usd" || session?.inputMode === "usd";
+  const { market, refreshLockedSnapshot } =
+    useMarketInformation(krwMarketEnabled);
   const { market: usdMarket, refreshLockedSnapshot: refreshLockedUsdSnapshot } =
-    useUsdMarketInformation(
-      inputMode === "usd" || session?.inputMode === "usd",
-    );
+    useUsdMarketInformation(usdMarketEnabled);
   const [busy, setBusy] = useState(false);
   const [retryingSlot, setRetryingSlot] = useState<number>();
   const [error, setError] = useState<string>();

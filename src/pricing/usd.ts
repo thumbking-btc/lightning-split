@@ -31,6 +31,16 @@ export interface UsdPriceSourceAdapter {
   fetchObservation(): Promise<UsdPriceObservation>;
 }
 
+export interface UsdPremiumReferenceObservation {
+  readonly priceUsdCents: bigint;
+  readonly observedAtMs: number;
+  readonly retrievedAtMs: number;
+}
+
+export interface UsdPremiumReferenceAdapter {
+  fetchObservation(): Promise<UsdPremiumReferenceObservation>;
+}
+
 export interface UsdPriceSnapshotCache {
   get(): Promise<UsdPriceSnapshot | null>;
   put(snapshot: UsdPriceSnapshot): Promise<void>;
@@ -241,6 +251,38 @@ export class KrakenUsdPriceAdapter implements UsdPriceSourceAdapter {
   }
 }
 
+export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAdapter {
+  constructor(
+    private readonly fetcher: Fetcher = fetch,
+    private readonly policy: PricePolicy = DEFAULT_PRICE_POLICY,
+    private readonly clock: () => number = Date.now,
+  ) {}
+
+  async fetchObservation(): Promise<UsdPremiumReferenceObservation> {
+    const response = await fetchBoundedJson(
+      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+      this.policy.http,
+      this.fetcher,
+      this.clock,
+    );
+    if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {
+      throw new InfrastructureError(
+        "INVALID_RESPONSE",
+        "Binance BTC-USDT ticker is invalid.",
+      );
+    }
+    const retrievedAtMs = this.clock();
+    return Object.freeze({
+      priceUsdCents: parseUsdCents(
+        response.value.price,
+        "Binance BTC-USDT price",
+      ),
+      observedAtMs: retrievedAtMs,
+      retrievedAtMs,
+    });
+  }
+}
+
 export class UsdPriceSnapshotUnavailableError extends AggregateError {
   constructor(errors: readonly unknown[]) {
     super(errors, "No fresh BTC/USD price source was available.");
@@ -344,7 +386,7 @@ export function parseUsdPremiumReference(value: unknown): UsdPremiumReference {
 
 export class CoinbasePremiumService {
   constructor(
-    private readonly referenceAdapter: UsdPriceSourceAdapter,
+    private readonly referenceAdapter: UsdPremiumReferenceAdapter,
     private readonly cache: UsdPremiumReferenceCache = new NoopUsdPremiumReferenceCache(),
     private readonly policy: PricePolicy = DEFAULT_PRICE_POLICY,
     private readonly clock: () => number = Date.now,
