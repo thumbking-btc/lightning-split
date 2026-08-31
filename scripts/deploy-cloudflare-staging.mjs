@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const isWorkersBuild = process.env.WORKERS_CI === "1";
@@ -19,60 +18,18 @@ if (branch === "main") {
   process.exit(0);
 }
 
-const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+console.log(`Non-production branch ${branch} detected; deploying isolated staging Worker.`);
 
-function runWrangler(args, options = {}) {
-  const result = spawnSync(npx, ["wrangler", ...args], {
+const result = spawnSync(
+  process.platform === "win32" ? "npx.cmd" : "npx",
+  ["wrangler", "deploy", "--env", "staging"],
+  {
+    stdio: "inherit",
     env: process.env,
-    ...options,
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(
-      `Wrangler ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}.`,
-    );
-  }
-  return result;
-}
-
-console.log(
-  `Non-production branch ${branch} detected; deploying isolated staging Worker.`,
+  },
 );
-runWrangler(["deploy", "--env", "staging"], { stdio: "inherit" });
 
-const secretList = runWrangler(["secret", "list", "--env", "staging"], {
-  encoding: "utf8",
-  stdio: ["ignore", "pipe", "inherit"],
-});
-
-let secrets;
-try {
-  secrets = JSON.parse(secretList.stdout.trim() || "[]");
-} catch (cause) {
-  throw new Error("Could not parse the staging Worker secret list.", {
-    cause,
-  });
+if (result.error) throw result.error;
+if (result.status !== 0) {
+  throw new Error(`Staging deployment failed with exit code ${result.status ?? "unknown"}.`);
 }
-
-if (
-  !Array.isArray(secrets) ||
-  !secrets.some(
-    (secret) =>
-      secret &&
-      typeof secret === "object" &&
-      secret.name === "VERIFICATION_TOKEN_SECRET",
-  )
-) {
-  console.log("Creating the staging-only verification secret.");
-  const secret = randomBytes(32).toString("hex");
-  runWrangler(
-    ["secret", "put", "VERIFICATION_TOKEN_SECRET", "--env", "staging"],
-    {
-      encoding: "utf8",
-      input: `${secret}\n`,
-      stdio: ["pipe", "inherit", "inherit"],
-    },
-  );
-}
-
-console.log("Staging Worker deployment and secret configuration completed.");
