@@ -1,0 +1,45 @@
+.language-switch {
+  width: min(100%, 34rem);
+  margin: 0 auto 0.7rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.language-switch button {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.72rem;
+  border: 1px solid var(--line, #d7d7d7);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.language-switch button.active {
+  border-color: currentColor;
+  font-weight: 700;
+}
+
+.unit-switch {
+  max-width: 100%;
+}
+
+.unit-switch button {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 430px) {
+  .language-switch {
+    padding-inline: 0.15rem;
+  }
+
+  .unit-switch button {
+    padding-inline: 0.55rem;
+    font-size: 0.8rem;
+  }
+}
