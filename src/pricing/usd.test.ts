@@ -103,7 +103,11 @@ describe("BTC/USD provider adapters", () => {
     );
 
     await expect(
-      new CoinbaseUsdPriceAdapter(fetcher, undefined, () => NOW).fetchObservation(),
+      new CoinbaseUsdPriceAdapter(
+        fetcher,
+        undefined,
+        () => NOW,
+      ).fetchObservation(),
     ).rejects.toMatchObject({ code: "STALE_DATA" });
   });
 
