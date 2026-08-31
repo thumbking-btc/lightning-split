@@ -97,16 +97,33 @@ await replaceInFile("src/app/session.ts", [
   ],
   [
     `    slots: session.slots.map((slot): ClientSlot =>
-      slot.slotNumber === slotNumber
-        ? {
-            ...slot,
-            annotation: {`,
-    `    slots: session.slots.map((slot): ClientSlot =>
       slot.slotNumber === slotNumber &&
       (slot.status === "settled" || slot.status === "manuallyConfirmed")
         ? {
             ...slot,
             annotation: {`,
+    `    slots: session.slots.map((slot): ClientSlot =>
+      slot.slotNumber === slotNumber
+        ? {
+            ...slot,
+            annotation: {`,
+  ],
+]);
+
+await replaceInFile("src/app/session.test.ts", [
+  [
+    `  it("adds user display metadata only after a slot is settled", () => {`,
+    `  it("adds local display metadata without altering payment identity", () => {`,
+  ],
+  [
+    `    expect(
+      annotateSettledSlot(generating, 1, { displayName: "철수", note: "표시" })
+        .slots[0]?.annotation,
+    ).toBeUndefined();`,
+    `    expect(
+      annotateSettledSlot(generating, 1, { displayName: "철수", note: "표시" })
+        .slots[0]?.annotation,
+    ).toMatchObject({ displayName: "철수", note: "표시" });`,
   ],
 ]);
 
