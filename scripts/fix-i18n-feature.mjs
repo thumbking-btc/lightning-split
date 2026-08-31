@@ -24,7 +24,7 @@ const fixedMarketPrice = `            {information
                     ),
                     language,
                   )
-                : \`${"${formatInteger(BigInt(market.information?.snapshot.priceKrw ?? \"0\"), language)}"}${"${language === \"ko\" ? \"원\" : \" KRW\"}"}\`
+                : \`${'${formatInteger(BigInt(market.information?.snapshot.priceKrw ?? "0"), language)}'}${'${language === "ko" ? "원" : " KRW"}'}\`
               : c.checking}`;
 
 if (app.includes(brokenMarketPrice)) {

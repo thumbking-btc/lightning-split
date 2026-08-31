@@ -605,13 +605,11 @@ export function MarketSummary({
               ? usingUsd
                 ? formatUsdCents(
                     BigInt(
-                      (information as UsdMarketInformationState["information"] extends infer T
-                        ? never
-                        : never) ?? 0,
+                      usdMarket?.information?.snapshot.priceUsdCents ?? "0",
                     ),
                     language,
                   )
-                : ""
+                : `${formatInteger(BigInt(market.information?.snapshot.priceKrw ?? "0"), language)}${language === "ko" ? "원" : " KRW"}`
               : c.checking}
           </strong>
         </div>
