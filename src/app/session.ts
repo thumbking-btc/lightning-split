@@ -1,12 +1,14 @@
 import type {
   BatchInvoiceResponseDto,
   SettlementResponseDto,
+  UsdPriceSnapshotDto,
 } from "../api/contracts";
 import type { PriceSnapshotDto } from "../api/serialization";
 import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
 import {
   createKrwSplitPlan,
   createSatsSplitPlan,
+  createUsdSplitPlan,
   sumAmounts,
 } from "../domain/money";
 import type {
@@ -25,6 +27,7 @@ import {
 
 export interface DraftInput {
   readonly inputMode: InputMode;
+  /** KRW and sats are whole units; USD is canonical cents. */
   readonly totalAmount: string;
   readonly totalPeople: number;
   readonly excludePayer: boolean;
@@ -38,6 +41,7 @@ export interface SettlementPreview {
   readonly targetSats: readonly bigint[];
   readonly invoiceCount: number;
   readonly payerShareKrw: bigint | null;
+  readonly payerShareUsdCents: bigint | null;
   readonly payerShareSats: bigint | null;
 }
 
@@ -54,6 +58,14 @@ function persistedInvoice(
   const { awaitingPersistence: _awaitingPersistence, ...persisted } = invoice;
   void _awaitingPersistence;
   return persisted;
+}
+
+function slotAmountMetadata(slot: ClientSlot | undefined): {
+  readonly usdCentsShare?: string;
+} {
+  return slot?.usdCentsShare === undefined
+    ? {}
+    : { usdCentsShare: slot.usdCentsShare };
 }
 
 function appendInvoiceHistory(
@@ -89,6 +101,9 @@ function appendInvoiceHistory(
       slotNumber: slot.slotNumber,
       targetSats: slot.targetSats,
       ...(slot.krwShare === undefined ? {} : { krwShare: slot.krwShare }),
+      ...(slot.usdCentsShare === undefined
+        ? {}
+        : { usdCentsShare: slot.usdCentsShare }),
       attempt: slot.attempt,
       invoice: persistedInvoice(slot.invoice),
       retiredAt: now.toISOString(),
@@ -152,6 +167,7 @@ function parsePositiveDecimal(value: string): bigint {
 export function createSettlementPreview(
   draft: DraftInput,
   priceSnapshot?: PriceSnapshotDto,
+  usdPriceSnapshot?: UsdPriceSnapshotDto,
 ): SettlementPreview {
   if (
     draft.overallNote !== undefined &&
@@ -176,6 +192,25 @@ export function createSettlementPreview(
       targetSats: plan.targetSats,
       invoiceCount: plan.invoiceCount,
       payerShareKrw: plan.payerShareKrw,
+      payerShareUsdCents: null,
+      payerShareSats: null,
+    };
+  }
+  if (draft.inputMode === "usd") {
+    if (!usdPriceSnapshot)
+      throw new Error("BTC/USD 기준가격을 먼저 조회하십시오.");
+    const plan = createUsdSplitPlan(
+      total,
+      draft.totalPeople,
+      draft.excludePayer,
+      BigInt(usdPriceSnapshot.priceUsdCents),
+    );
+    return {
+      invoiceShares: plan.invoiceShares,
+      targetSats: plan.targetSats,
+      invoiceCount: plan.invoiceCount,
+      payerShareKrw: null,
+      payerShareUsdCents: plan.payerShareUsdCents,
       payerShareSats: null,
     };
   }
@@ -189,6 +224,7 @@ export function createSettlementPreview(
     targetSats: plan.invoiceShares,
     invoiceCount: plan.invoiceCount,
     payerShareKrw: null,
+    payerShareUsdCents: null,
     payerShareSats: plan.payerShareSats,
   };
 }
@@ -197,6 +233,7 @@ export function createGeneratingSession(
   draft: DraftInput,
   preview: SettlementPreview,
   priceSnapshot: PriceSnapshotDto | undefined,
+  usdPriceSnapshot?: UsdPriceSnapshotDto,
   now = new Date(),
   idFactory: () => string = createLocalSettlementId,
 ): SettlementSession {
@@ -205,6 +242,9 @@ export function createGeneratingSession(
     targetSats: targetSats.toString(),
     ...(draft.inputMode === "krw"
       ? { krwShare: preview.invoiceShares[index]!.toString() }
+      : {}),
+    ...(draft.inputMode === "usd"
+      ? { usdCentsShare: preview.invoiceShares[index]!.toString() }
       : {}),
     attempt: 1,
     status: "generating",
@@ -223,9 +263,13 @@ export function createGeneratingSession(
       ...draft.participantNameCandidates,
     ]),
     ...(priceSnapshot ? { priceSnapshot } : {}),
+    ...(usdPriceSnapshot ? { usdPriceSnapshot } : {}),
     ...(preview.payerShareKrw === null
       ? {}
       : { payerShareKrw: preview.payerShareKrw.toString() }),
+    ...(preview.payerShareUsdCents === null
+      ? {}
+      : { payerShareUsdCents: preview.payerShareUsdCents.toString() }),
     ...(preview.payerShareSats === null
       ? {}
       : { payerShareSats: preview.payerShareSats.toString() }),
@@ -262,15 +306,18 @@ export function applyBatchResponse(
         existing?.annotation === undefined
           ? {}
           : { annotation: existing.annotation };
+      const amountMetadata = slotAmountMetadata(existing);
       return slot.status === "pending"
         ? {
             ...slot,
+            ...amountMetadata,
             ...annotation,
             status: "pending",
             invoice: { ...slot.invoice, awaitingPersistence: true },
           }
         : {
             ...slot,
+            ...amountMetadata,
             ...annotation,
             status: "failed",
             failure: slot.failure,
@@ -309,6 +356,9 @@ export function prepareSlotRetry(
             slotNumber: slot.slotNumber,
             targetSats: slot.targetSats,
             ...(slot.krwShare === undefined ? {} : { krwShare: slot.krwShare }),
+            ...(slot.usdCentsShare === undefined
+              ? {}
+              : { usdCentsShare: slot.usdCentsShare }),
             attempt: slot.attempt + 1,
             status: "generating",
             ...(slot.annotation === undefined
@@ -335,9 +385,7 @@ export function applySlotRetryResponse(
   }
   const result = response.slots[0];
   const current = session.slots.find((slot) => slot.slotNumber === slotNumber);
-  if (!current) {
-    return session;
-  }
+  if (!current) return session;
   if (current.status === "generating" && result.attempt !== current.attempt)
     return session;
   if (
@@ -363,10 +411,12 @@ export function applySlotRetryResponse(
   }
   const annotation =
     current.annotation === undefined ? {} : { annotation: current.annotation };
+  const amountMetadata = slotAmountMetadata(current);
   if (current.status !== "generating") {
     if (result.status !== "pending") return session;
     const issuedSlot: ClientSlot = {
       ...result,
+      ...amountMetadata,
       ...annotation,
       status: "pending",
       invoice: { ...result.invoice, awaitingPersistence: true },
@@ -401,12 +451,14 @@ export function applySlotRetryResponse(
       return result.status === "pending"
         ? {
             ...result,
+            ...amountMetadata,
             ...annotation,
             status: "pending",
             invoice: { ...result.invoice, awaitingPersistence: true },
           }
         : {
             ...result,
+            ...amountMetadata,
             ...annotation,
             status: "failed",
             failure: result.failure,
@@ -596,6 +648,9 @@ function applyHistoricalSettlementResponse(
               ...(slot.krwShare === undefined
                 ? {}
                 : { krwShare: slot.krwShare }),
+              ...(slot.usdCentsShare === undefined
+                ? {}
+                : { usdCentsShare: slot.usdCentsShare }),
               attempt: historicalAttempt.attempt,
               status: "settled",
               invoice: historicalAttempt.invoice,
@@ -959,6 +1014,12 @@ export function getSettlementProgress(
     ),
     totalKrw: sumAmounts(
       session.slots.map((slot) => BigInt(slot.krwShare ?? "0")),
+    ),
+    completedUsdCents: sumAmounts(
+      completed.map((slot) => BigInt(slot.usdCentsShare ?? "0")),
+    ),
+    totalUsdCents: sumAmounts(
+      session.slots.map((slot) => BigInt(slot.usdCentsShare ?? "0")),
     ),
   };
 }
