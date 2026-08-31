@@ -10,10 +10,7 @@ import { ApiClientError } from "./api";
 const USD_REST_REFRESH_MS = 16_000;
 
 export type UsdMarketConnection =
-  | "connecting"
-  | "recent"
-  | "stale"
-  | "unavailable";
+  "connecting" | "recent" | "stale" | "unavailable";
 
 export interface UsdMarketInformationState {
   readonly information?: UsdPriceResponseDto;

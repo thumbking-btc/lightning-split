@@ -902,10 +902,12 @@ export function App() {
   const [lightningAddress, setLightningAddress] = useState("");
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
+  const [session, setSession] = useState<SettlementSession | null>(null);
   const { market, refreshLockedSnapshot } = useMarketInformation();
   const { market: usdMarket, refreshLockedSnapshot: refreshLockedUsdSnapshot } =
-    useUsdMarketInformation();
-  const [session, setSession] = useState<SettlementSession | null>(null);
+    useUsdMarketInformation(
+      inputMode === "usd" || session?.inputMode === "usd",
+    );
   const [busy, setBusy] = useState(false);
   const [retryingSlot, setRetryingSlot] = useState<number>();
   const [error, setError] = useState<string>();
