@@ -1,9 +1,16 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-const appPath = "src/App.tsx";
-let app = await readFile(appPath, "utf8");
+async function replaceInFile(path, replacements) {
+  let content = await readFile(path, "utf8");
+  for (const [from, to] of replacements) {
+    if (content.includes(from)) content = content.replace(from, to);
+  }
+  await writeFile(path, content);
+}
 
-const brokenMarketPrice = `            {information
+await replaceInFile("src/App.tsx", [
+  [
+    `            {information
               ? usingUsd
                 ? formatUsdCents(
                     BigInt(
@@ -14,9 +21,8 @@ const brokenMarketPrice = `            {information
                     language,
                   )
                 : ""
-              : c.checking}`;
-
-const fixedMarketPrice = `            {information
+              : c.checking}`,
+    `            {information
               ? usingUsd
                 ? formatUsdCents(
                     BigInt(
@@ -25,10 +31,35 @@ const fixedMarketPrice = `            {information
                     language,
                   )
                 : \`${'${formatInteger(BigInt(market.information?.snapshot.priceKrw ?? "0"), language)}'}${'${language === "ko" ? "원" : " KRW"}'}\`
-              : c.checking}`;
+              : c.checking}`,
+  ],
+  ["preview.payerShareUsdCents !== null", "preview.payerShareUsdCents != null"],
+]);
 
-if (app.includes(brokenMarketPrice)) {
-  app = app.replace(brokenMarketPrice, fixedMarketPrice);
-}
+await replaceInFile("src/app/session.ts", [
+  [
+    "  readonly payerShareUsdCents: bigint | null;",
+    "  readonly payerShareUsdCents?: bigint | null;",
+  ],
+]);
 
-await writeFile(appPath, app);
+await replaceInFile("src/lightning/settlement.ts", [
+  [
+    `export function selectSettlementCapability(input: {
+  readonly verifyUrl?: string;
+}): SettlementCapability {
+  return input.verifyUrl === undefined
+    ? Object.freeze({ method: "manual" })
+    : Object.freeze({ method: "lud21", verifyUrl: input.verifyUrl });
+}`,
+    `export function selectSettlementCapability(input: object): SettlementCapability {
+  const verifyUrl =
+    "verifyUrl" in input && typeof input.verifyUrl === "string"
+      ? input.verifyUrl
+      : undefined;
+  return verifyUrl === undefined
+    ? Object.freeze({ method: "manual" })
+    : Object.freeze({ method: "lud21", verifyUrl });
+}`,
+  ],
+]);
