@@ -10,9 +10,11 @@ import {
   createCoinbaseTickerSubscription,
   getUsdMarketRestRefreshDelay,
   getUsdMarketRestRefreshInterval,
+  parseBinanceTradeMessage,
   parseCoinbaseTickerMessage,
   USD_REALTIME_MARKET_POLICY,
   withLiveUsdMarketPrice,
+  withLiveUsdPremiumReference,
   type LiveUsdMarketPrice,
 } from "../market/usdRealtime";
 import { ApiClientError } from "./api";
@@ -172,6 +174,7 @@ export function useUsdMarketInformation(enabled = true): {
     connection: "connecting",
   });
   const informationRef = useRef<UsdPriceResponseDto | undefined>(undefined);
+  const premiumReferenceRef = useRef<LiveUsdMarketPrice | undefined>(undefined);
   const livePriceActiveRef = useRef(false);
   const [livePriceActive, setLivePriceActive] = useState(false);
   const lastRestRequestAtRef = useRef(0);
@@ -341,7 +344,9 @@ export function useUsdMarketInformation(enabled = true): {
       if (!price || disposed || !browserIsActive()) return;
       const current = informationRef.current;
       if (!current) return;
-      const next = withLiveUsdMarketPrice(current, price);
+      let next = withLiveUsdMarketPrice(current, price);
+      if (premiumReferenceRef.current)
+        next = withLiveUsdPremiumReference(next, premiumReferenceRef.current);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;
       setInformation(next, "live");
@@ -392,6 +397,80 @@ export function useUsdMarketInformation(enabled = true): {
         setStreamActive(false);
         scheduleReconnect();
       };
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") disconnect();
+      else connect();
+    };
+    const handleOnline = () => connect();
+    const handleOffline = () => disconnect();
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    if (browserIsActive()) connect();
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      disconnect();
+    };
+  }, [enabled, setInformation]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let disposed = false;
+    let socket: WebSocket | undefined;
+    let reconnectTimer: number | undefined;
+
+    const browserIsActive = () =>
+      document.visibilityState === "visible" && navigator.onLine !== false;
+    const scheduleReconnect = () => {
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      if (disposed || !browserIsActive()) return;
+      reconnectTimer = window.setTimeout(
+        connect,
+        USD_REALTIME_MARKET_POLICY.reconnectDelayMs,
+      );
+    };
+    const disconnect = () => {
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      const activeSocket = socket;
+      socket = undefined;
+      activeSocket?.close();
+    };
+    const connect = () => {
+      if (disposed || !browserIsActive() || socket) return;
+      try {
+        const nextSocket = new WebSocket(
+          USD_REALTIME_MARKET_POLICY.binanceWebsocketUrl,
+        );
+        socket = nextSocket;
+        nextSocket.onmessage = (event) => {
+          void parseBinanceTradeMessage(event.data).then((reference) => {
+            if (!reference || disposed || socket !== nextSocket) return;
+            premiumReferenceRef.current = reference;
+            const current = informationRef.current;
+            if (!current || current.snapshot.source !== "coinbase") return;
+            setInformation(
+              withLiveUsdPremiumReference(current, reference),
+              livePriceActiveRef.current ? "live" : "recent",
+            );
+          });
+        };
+        nextSocket.onerror = () => {
+          if (socket === nextSocket) nextSocket.close();
+        };
+        nextSocket.onclose = () => {
+          if (socket !== nextSocket) return;
+          socket = undefined;
+          scheduleReconnect();
+        };
+      } catch {
+        scheduleReconnect();
+      }
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") disconnect();

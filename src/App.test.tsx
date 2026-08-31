@@ -140,7 +140,7 @@ describe("v1 mobile accessibility states", () => {
         }}
       />,
     );
-    expect(html).toContain("기준 시세 확인 불가");
+    expect(html).toContain("비교 시세 확인 불가");
     expect(html).not.toContain("정보 없음");
   });
 

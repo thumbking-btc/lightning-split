@@ -4,8 +4,10 @@ import {
   calculateCoinbasePremiumBasisPoints,
   createCoinbaseHeartbeatSubscription,
   createCoinbaseTickerSubscription,
+  parseBinanceTradeMessage,
   parseCoinbaseTickerMessage,
   withLiveUsdMarketPrice,
+  withLiveUsdPremiumReference,
 } from "./usdRealtime";
 
 describe("Coinbase realtime BTC/USD", () => {
@@ -42,6 +44,41 @@ describe("Coinbase realtime BTC/USD", () => {
       priceUsdCents: 10_123_413n,
       observedAtMs: Date.parse("2030-01-01T00:00:09.500Z"),
     });
+  });
+
+  it("parses Binance BTCUSDT trade data and creates a premium without REST premium", async () => {
+    const now = Date.parse("2030-01-01T00:00:10.000Z");
+    const reference = await parseBinanceTradeMessage(
+      JSON.stringify({
+        e: "trade",
+        E: Date.parse("2030-01-01T00:00:09.500Z"),
+        s: "BTCUSDT",
+        p: "100000.00",
+      }),
+      now,
+    );
+    expect(reference).toEqual({
+      priceUsdCents: 10_000_000n,
+      observedAtMs: Date.parse("2030-01-01T00:00:09.500Z"),
+    });
+    const information = withLiveUsdPremiumReference(
+      {
+        ok: true,
+        snapshot: {
+          priceUsdCents: "10100000",
+          source: "coinbase",
+          market: "BTC-USD",
+          observedAt: "2030-01-01T00:00:09.000Z",
+          retrievedAt: "2030-01-01T00:00:09.000Z",
+          snapshotAt: "2030-01-01T00:00:09.000Z",
+          fallbackUsed: false,
+        },
+      },
+      reference!,
+      now,
+    );
+    expect(information.premium?.basisPoints).toBe("100");
+    expect(information.premium?.referencePriceUsdCents).toBe("10000000");
   });
 
   it("recalculates Coinbase Premium from the live Coinbase price", () => {

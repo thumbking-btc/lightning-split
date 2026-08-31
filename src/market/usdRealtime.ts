@@ -5,6 +5,7 @@ import type {
 
 export const USD_REALTIME_MARKET_POLICY = Object.freeze({
   websocketUrl: "wss://advanced-trade-ws.coinbase.com",
+  binanceWebsocketUrl: "wss://data-stream.binance.vision:443/ws/btcusdt@trade",
   productId: "BTC-USD",
   liveRenderIntervalMs: 1_000,
   reconnectDelayMs: 12_000,
@@ -56,6 +57,37 @@ export function createCoinbaseHeartbeatSubscription(): string {
     type: "subscribe",
     channel: "heartbeats",
   });
+}
+
+export async function parseBinanceTradeMessage(
+  data: unknown,
+  nowMs = Date.now(),
+): Promise<LiveUsdMarketPrice | null> {
+  const text = await messageText(data);
+  if (text === null) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    value.e !== "trade" ||
+    value.s !== "BTCUSDT" ||
+    typeof value.E !== "number"
+  )
+    return null;
+  const ageMs = nowMs - value.E;
+  if (
+    ageMs > USD_REALTIME_MARKET_POLICY.maximumLivePriceAgeMs ||
+    ageMs < -USD_REALTIME_MARKET_POLICY.maximumFutureClockSkewMs
+  )
+    return null;
+  const priceUsdCents = decimalUsdToCents(value.p);
+  return priceUsdCents === null
+    ? null
+    : Object.freeze({ priceUsdCents, observedAtMs: value.E });
 }
 
 export async function parseCoinbaseTickerMessage(
@@ -116,6 +148,24 @@ export function calculateCoinbasePremiumBasisPoints(
     roundHalfUp(coinbasePriceUsdCents * 10_000n, referencePriceUsdCents) -
     10_000n
   );
+}
+
+export function withLiveUsdPremiumReference(
+  information: UsdPriceResponseDto,
+  reference: LiveUsdMarketPrice,
+  retrievedAtMs = Date.now(),
+): UsdPriceResponseDto {
+  return Object.freeze({
+    ...information,
+    premium: {
+      basisPoints: calculateCoinbasePremiumBasisPoints(
+        BigInt(information.snapshot.priceUsdCents),
+        reference.priceUsdCents,
+      ).toString(),
+      referencePriceUsdCents: reference.priceUsdCents.toString(),
+      retrievedAt: new Date(retrievedAtMs).toISOString(),
+    },
+  });
 }
 
 export function withLiveUsdMarketPrice(
