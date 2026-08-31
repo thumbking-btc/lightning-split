@@ -45,7 +45,7 @@ jobs:
           s = s.replace(old, new, 1)
 
           old = '''          inputMode={inputMode === "usd" ? "decimal" : "numeric"}\n          value={totalAmount}'''
-          new = '''          inputMode={inputMode === "usd" ? "decimal" : "numeric"}\n          pattern={inputMode === "usd" ? "[0-9]*\\.?[0-9]*" : "[0-9]*"}\n          value={totalAmount}'''
+          new = '''          inputMode={inputMode === "usd" ? "decimal" : "numeric"}\n          pattern={inputMode === "usd" ? "[0-9]*[.]?[0-9]*" : "[0-9]*"}\n          value={totalAmount}'''
           if old not in s:
               raise SystemExit('amount input pattern marker not found')
           s = s.replace(old, new, 1)
