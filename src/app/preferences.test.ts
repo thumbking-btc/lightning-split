@@ -19,8 +19,10 @@ describe("currency input preferences", () => {
 
   it("converts a valid USD input to canonical integer cents", () => {
     expect(usdInputToCents("12")).toBe("1200");
+    expect(usdInputToCents("12.")).toBe("1200");
     expect(usdInputToCents("12.3")).toBe("1230");
     expect(usdInputToCents("12.34")).toBe("1234");
+    expect(usdInputToCents("00012.34")).toBe("1234");
     expect(usdInputToCents("0.01")).toBe("1");
     expect(usdInputToCents("0")).toBe("");
   });
