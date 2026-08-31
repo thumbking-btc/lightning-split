@@ -11,7 +11,15 @@ import {
   isLightningInvoiceInput,
   LIGHTNING_INVOICE_INPUT_MESSAGE,
 } from "./app/lightningInput";
+import { shareInvoicePaymentRequest } from "./app/invoiceShare";
 import { parseParticipantNameCandidates } from "./app/nameCandidates";
+import { SettlementHistoryScreen } from "./app/SettlementHistory";
+import {
+  archiveSettlementSession,
+  deleteSettlementHistoryRecord,
+  listSettlementHistory,
+  type SettlementHistoryRecord,
+} from "./app/settlementHistory";
 import {
   clearActiveSession,
   loadActiveSession,
@@ -273,6 +281,37 @@ export function InvoiceCard({
   const status = slotStatus(slot, language);
   const statusLines = status.label.split(" · ");
   const [copyFeedback, setCopyFeedback] = useState<string>();
+  const [shareFeedback, setShareFeedback] = useState<string>();
+
+  const shareInvoice = async () => {
+    if (!slot.invoice) return;
+    const result = await shareInvoicePaymentRequest({
+      slotNumber: slot.slotNumber,
+      ...(slot.annotation?.displayName
+        ? { displayName: slot.annotation.displayName }
+        : {}),
+      ...(slot.krwShare ? { krwShare: slot.krwShare } : {}),
+      ...(slot.usdCentsShare ? { usdCentsShare: slot.usdCentsShare } : {}),
+      targetSats: slot.targetSats,
+      invoice: slot.invoice.bolt11,
+      expiresAt: slot.invoice.expiresAt,
+    });
+    setShareFeedback(
+      result === "shared"
+        ? language === "ko"
+          ? "QR과 결제 요청을 공유했습니다."
+          : "Shared the QR and payment request."
+        : result === "copied"
+          ? language === "ko"
+            ? "공유 기능을 사용할 수 없어 결제 요청 정보를 복사했습니다."
+            : "Sharing is unavailable, so the payment request was copied."
+          : result === "failed"
+            ? language === "ko"
+              ? "공유하지 못했습니다. 결제 요청 복사를 사용하십시오."
+              : "Could not share. Use Copy payment request instead."
+            : undefined,
+    );
+  };
 
   const copyInvoice = async () => {
     if (!slot.invoice) return;
@@ -394,6 +433,18 @@ export function InvoiceCard({
               ) : (
                 <div className="qr-placeholder dormant" aria-hidden="true" />
               )}
+            </div>
+            <button
+              className="secondary-button full"
+              type="button"
+              onClick={() => void shareInvoice()}
+            >
+              {language === "ko"
+                ? "QR · 결제 요청 공유"
+                : "Share QR · payment request"}
+            </button>
+            <div className="copy-feedback" aria-live="polite">
+              {shareFeedback}
             </div>
             <button
               className="secondary-button full"
@@ -928,6 +979,11 @@ export function App() {
   const [lightningAddress, setLightningAddress] = useState("");
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
+  const [historyRecords, setHistoryRecords] = useState<
+    SettlementHistoryRecord[]
+  >([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyError, setHistoryError] = useState<string>();
   const [session, setSession] = useState<SettlementSession | null>(null);
   const krwMarketEnabled = inputMode === "krw" || session?.inputMode === "krw";
   const usdMarketEnabled = inputMode === "usd" || session?.inputMode === "usd";
@@ -995,6 +1051,22 @@ export function App() {
   const refreshUsdPrice = useCallback(async () => {
     return (await refreshLockedUsdSnapshot()).snapshot;
   }, [refreshLockedUsdSnapshot]);
+
+  const refreshHistory = useCallback(async () => {
+    const records = await listSettlementHistory();
+    setHistoryRecords(records);
+    setHistoryError(undefined);
+  }, []);
+
+  useEffect(() => {
+    void refreshHistory().catch(() =>
+      setHistoryError(
+        languageRef.current === "ko"
+          ? "이 기기에 저장된 정산 기록을 불러오지 못했습니다."
+          : "Could not load settlement history stored on this device.",
+      ),
+    );
+  }, [refreshHistory]);
 
   useEffect(() => {
     const restoreEpoch = sessionEpochRef.current;
@@ -1384,6 +1456,19 @@ export function App() {
         ? NEW_SETTLEMENT_PENDING_CONFIRMATION
         : "A payment is still pending. Start a new settlement anyway?";
     if (hasPendingSettlement(session) && !window.confirm(confirmation)) return;
+    if (session) {
+      try {
+        await archiveSettlementSession(session);
+        await refreshHistory();
+      } catch {
+        setPersistenceError(
+          language === "ko"
+            ? "현재 정산을 기록에 보관하지 못해 새 정산으로 넘어가지 않았습니다."
+            : "The current settlement could not be archived, so a new settlement was not started.",
+        );
+        return;
+      }
+    }
     await resetSession();
   };
 
@@ -1393,6 +1478,21 @@ export function App() {
         ? DELETE_SETTLEMENT_RECORD_CONFIRMATION
         : "Delete this settlement record from this device?";
     if (window.confirm(confirmation)) await resetSession();
+  };
+
+  const deleteHistoryRecord = async (id: string): Promise<boolean> => {
+    try {
+      await deleteSettlementHistoryRecord(id);
+      await refreshHistory();
+      return true;
+    } catch {
+      setHistoryError(
+        language === "ko"
+          ? "이 기기에서 정산 기록을 삭제하지 못했습니다."
+          : "Could not delete the settlement history record from this device.",
+      );
+      return false;
+    }
   };
 
   const annotate = (slotNumber: number, displayName: string) => {
@@ -1508,6 +1608,17 @@ export function App() {
       </main>
     );
 
+  if (historyOpen) {
+    return (
+      <SettlementHistoryScreen
+        records={historyRecords}
+        error={historyError}
+        onClose={() => setHistoryOpen(false)}
+        onDelete={deleteHistoryRecord}
+      />
+    );
+  }
+
   if (session) {
     const progress = getSettlementProgress(session);
     const duplicateSettledSlots = duplicateSettledSlotNumbers(session);
@@ -1529,6 +1640,18 @@ export function App() {
           language={language}
           onNewSettlement={() => void newSettlement()}
         />
+        <button
+          className="secondary-button full history-launch-button"
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+        >
+          {language === "ko" ? "정산 기록 보기" : "Settlement history"}
+          {historyRecords.length > 0
+            ? language === "ko"
+              ? ` · ${historyRecords.length}건`
+              : ` · ${historyRecords.length}`
+            : ""}
+        </button>
         {session.overallNote &&
           session.providerCommentStatus === "forwarded" && (
             <p className="provider-comment-status" role="status">
@@ -1721,6 +1844,18 @@ export function App() {
         </h1>
         <p>{c.heroDescription}</p>
       </header>
+      <button
+        className="secondary-button full history-launch-button"
+        type="button"
+        onClick={() => setHistoryOpen(true)}
+      >
+        {language === "ko" ? "정산 기록 보기" : "Settlement history"}
+        {historyRecords.length > 0
+          ? language === "ko"
+            ? ` · ${historyRecords.length}건`
+            : ` · ${historyRecords.length}`
+          : ""}
+      </button>
       <section className="form-card">
         <AmountInput
           inputMode={inputMode}

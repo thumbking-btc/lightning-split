@@ -1,27 +1,23 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "lightning-split",
+  "name": "lightning-split-preview-runtime",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-08-30",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
   "ratelimits": [
     {
       "name": "INVOICE_RATE_LIMITER",
-      "namespace_id": "2026083001",
+      "namespace_id": "2026090111",
       "simple": { "limit": 30, "period": 60 },
     },
     {
       "name": "SETTLEMENT_RATE_LIMITER",
-      "namespace_id": "2026083002",
+      "namespace_id": "2026090112",
       "simple": { "limit": 300, "period": 60 },
     },
   ],
-  "exports": {
-    "InvoiceBatchCoordinator": {
-      "type": "durable-object",
-      "state": "deleted",
-    },
-  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
