@@ -208,7 +208,9 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("직접 확인 완료");
     expect(html).toContain("이 결제의 참여자");
-    expect(html).toContain("결제 QR이나 라이트닝 네트워크에는 포함되지 않습니다");
+    expect(html).toContain(
+      "결제 QR이나 라이트닝 네트워크에는 포함되지 않습니다",
+    );
     expect(html).toContain("완료 표시 취소");
     expect(html).not.toContain("누가 보냈나요?");
     expect(html).not.toContain("결제 요청 복사");

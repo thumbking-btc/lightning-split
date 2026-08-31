@@ -160,7 +160,7 @@ describe("mobile settlement session", () => {
     expect(session.slots.map((slot) => slot.slotNumber)).toEqual([1, 2, 3]);
   });
 
-  it("adds user display metadata only after a slot is settled", () => {
+  it("adds local user display metadata without changing payment state", () => {
     const draft: DraftInput = {
       inputMode: "sats",
       totalAmount: "1000",
@@ -174,10 +174,14 @@ describe("mobile settlement session", () => {
       createSettlementPreview(draft),
       undefined,
     );
-    expect(
-      annotateSettledSlot(generating, 1, { displayName: "철수", note: "표시" })
-        .slots[0]?.annotation,
-    ).toBeUndefined();
+    const labeled = annotateSettledSlot(generating, 1, {
+      displayName: "철수",
+      note: "표시",
+    });
+    expect(labeled.slots[0]).toMatchObject({
+      status: "generating",
+      annotation: { displayName: "철수", note: "표시" },
+    });
     const settled = {
       ...generating,
       slots: generating.slots.map((slot) => ({

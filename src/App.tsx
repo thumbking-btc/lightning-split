@@ -218,7 +218,9 @@ export function InvoiceCard({
           이 결제의 참여자 <span>선택</span>
           <input
             value={slot.annotation?.displayName ?? ""}
-            onChange={(event) => onAnnotate(slot.slotNumber, event.target.value)}
+            onChange={(event) =>
+              onAnnotate(slot.slotNumber, event.target.value)
+            }
             placeholder="예: 민수"
           />
         </label>
@@ -259,9 +261,7 @@ export function InvoiceCard({
               {slot.verificationDelayed ? (
                 <>
                   <strong>자동 확인 지연</strong>
-                  <span>
-                    받는 지갑에서 직접 확인해 완료할 수 있습니다.
-                  </span>
+                  <span>받는 지갑에서 직접 확인해 완료할 수 있습니다.</span>
                 </>
               ) : slot.invoice.verificationToken ? (
                 <>
