@@ -16,12 +16,6 @@
       "simple": { "limit": 300, "period": 60 },
     },
   ],
-  "exports": {
-    "InvoiceBatchCoordinator": {
-      "type": "durable-object",
-      "state": "deleted",
-    },
-  },
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application",
