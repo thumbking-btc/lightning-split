@@ -1,0 +1,29 @@
+name: Preview smoke temporary
+
+on:
+  push:
+    branches:
+      - feature/payment-verification
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Cloudflare Preview
+        shell: bash
+        run: |
+          preview_url="https://feature-payment-verification-lightning-split.thumbking-btc.workers.dev"
+          for attempt in $(seq 1 30); do
+            status=$(curl --silent --show-error --location --max-time 15 --output preview.html --write-out "%{http_code}" "$preview_url" || true)
+            if [ "$status" = "200" ] && grep --quiet "Lightning Split" preview.html; then
+              echo "Preview is ready: $preview_url"
+              exit 0
+            fi
+            echo "Attempt $attempt returned HTTP $status; waiting for alias propagation."
+            sleep 10
+          done
+          sed -n '1,80p' preview.html || true
+          exit 1
