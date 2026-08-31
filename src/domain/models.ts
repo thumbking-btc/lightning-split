@@ -1,4 +1,4 @@
-export type InputMode = "krw" | "sats";
+export type InputMode = "krw" | "usd" | "sats";
 export type ProviderCommentStatus = "forwarded" | "unsupported" | "partial";
 export type InvoiceSlotStatus =
   | "generating"
@@ -14,6 +14,16 @@ export interface PriceSnapshot {
   readonly priceKrw: bigint;
   readonly source: PriceSource;
   readonly market: string;
+  readonly observedAt: string;
+  readonly retrievedAt: string;
+  readonly snapshotAt: string;
+  readonly fallbackUsed: boolean;
+}
+
+export interface UsdPriceSnapshot {
+  readonly priceUsdCents: bigint;
+  readonly source: "coinbase" | "kraken";
+  readonly market: "BTC-USD";
   readonly observedAt: string;
   readonly retrievedAt: string;
   readonly snapshotAt: string;
@@ -69,6 +79,7 @@ export interface IssuedInvoice {
 interface InvoiceSlotBase {
   readonly slotNumber: number;
   readonly krwShare?: bigint;
+  readonly usdCentsShare?: bigint;
   readonly targetSats: bigint;
   readonly attempt: number;
 }
@@ -148,12 +159,24 @@ export interface KrwSettlementBatch extends SettlementBatchBase {
   readonly inputMode: "krw";
   readonly totalAmount: bigint;
   readonly priceSnapshot: PriceSnapshot;
+  readonly usdPriceSnapshot?: never;
+}
+
+export interface UsdSettlementBatch extends SettlementBatchBase {
+  readonly inputMode: "usd";
+  readonly totalAmount: bigint;
+  readonly priceSnapshot?: never;
+  readonly usdPriceSnapshot: UsdPriceSnapshot;
 }
 
 export interface SatsSettlementBatch extends SettlementBatchBase {
   readonly inputMode: "sats";
   readonly totalAmount: bigint;
   readonly priceSnapshot?: never;
+  readonly usdPriceSnapshot?: never;
 }
 
-export type SettlementBatch = KrwSettlementBatch | SatsSettlementBatch;
+export type SettlementBatch =
+  | KrwSettlementBatch
+  | UsdSettlementBatch
+  | SatsSettlementBatch;
