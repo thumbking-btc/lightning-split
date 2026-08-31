@@ -1,0 +1,42 @@
+name: Harden WebSocket startup once
+
+on:
+  push:
+    branches:
+      - refactor/stateless-invoice-issuance
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: ${{ github.event.head_commit.message == 'Run WebSocket startup hardening' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/stateless-invoice-issuance
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+      - name: Apply hardening
+        run: python scripts/harden-websocket-startup.py
+      - name: Install dependencies
+        run: npm ci
+      - name: Format
+        run: npm run format
+      - name: Verify
+        run: npm run verify
+      - name: Commit verified hardening
+        shell: bash
+        run: |
+          git config user.name "qozm515"
+          git config user.email "46486213+qozm515@users.noreply.github.com"
+          git rm .github/workflows/harden-websocket-startup-once.yml scripts/harden-websocket-startup.py
+          git add -A
+          git commit -m "Harden realtime market startup failures"
+          git push origin HEAD:refactor/stateless-invoice-issuance
