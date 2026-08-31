@@ -6,6 +6,7 @@ import { ApiClientError, requestInvoiceBatch } from "./app/api";
 import { scrollCarouselToIndex } from "./app/carousel";
 import { copyTextToClipboard, readTextFromClipboard } from "./app/clipboard";
 import { uiCopy } from "./app/i18n";
+import { heroLine1For } from "./app/heroCopy";
 import {
   isLightningInvoiceInput,
   LIGHTNING_INVOICE_INPUT_MESSAGE,
@@ -549,7 +550,7 @@ function marketConnectionLabel(
 ): string {
   const c = uiCopy(language);
   if (connection === "live") return c.live;
-  if (connection === "recent") return c.recentRest;
+  if (connection === "recent") return c.recent;
   if (connection === "stale") return c.stale;
   if (connection === "unavailable") return c.unavailable;
   return c.connecting;
@@ -718,7 +719,7 @@ export function AmountInput({
             aria-pressed={inputMode === "krw"}
             onClick={() => onInputModeChange("krw")}
           >
-            ₩ KRW
+            {c.krw}
           </button>
           <button
             type="button"
@@ -726,7 +727,7 @@ export function AmountInput({
             aria-pressed={inputMode === "usd"}
             onClick={() => onInputModeChange("usd")}
           >
-            $ USD
+            {c.usd}
           </button>
           <button
             type="button"
@@ -734,7 +735,7 @@ export function AmountInput({
             aria-pressed={inputMode === "sats"}
             onClick={() => onInputModeChange("sats")}
           >
-            sats
+            {c.sats}
           </button>
         </div>
       </div>
@@ -1697,7 +1698,7 @@ export function App() {
         <div className="brand-mark large">ϟ</div>
         <span className="eyebrow">LIGHTNING SPLIT</span>
         <h1>
-          {c.heroLine1}
+          {heroLine1For(inputMode, language)}
           <br />
           {c.heroLine2}
         </h1>

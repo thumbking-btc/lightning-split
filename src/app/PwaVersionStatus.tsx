@@ -4,6 +4,7 @@ import { useRegisterSW } from "virtual:pwa-register/react";
 import {
   checkForPwaUpdate,
   installPwaUpdate,
+  shouldAutoInstallPreviewUpdate,
   type PwaDeploymentState,
   subscribeToPwaUpdateChecks,
 } from "./pwaUpdate";
@@ -44,7 +45,7 @@ export function PwaVersionStatus() {
     return subscribeToPwaUpdateChecks(checkForUpdate);
   }, [refreshDeploymentState]);
 
-  const installUpdate = async () => {
+  const installUpdate = useCallback(async () => {
     setUpdating(true);
     try {
       await refreshDeploymentState();
@@ -52,7 +53,18 @@ export function PwaVersionStatus() {
     } finally {
       setUpdating(false);
     }
-  };
+  }, [refreshDeploymentState]);
+
+  const previewUpdateAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (!shouldAutoInstallPreviewUpdate(__APP_BRANCH__, deploymentState)) {
+      previewUpdateAttemptedRef.current = false;
+      return;
+    }
+    if (previewUpdateAttemptedRef.current) return;
+    previewUpdateAttemptedRef.current = true;
+    void installUpdate();
+  }, [deploymentState, installUpdate]);
 
   const updateAvailable = needRefresh || deploymentState === "updateAvailable";
 

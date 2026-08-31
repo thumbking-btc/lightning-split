@@ -29,6 +29,10 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('placeholder="0"');
+    expect(html).toContain(">원</button>");
+    expect(html).toContain(">달러</button>");
+    expect(html).toContain(">sats</button>");
+    expect(html).not.toContain("₩ KRW");
     expect(html).not.toContain('value="86000"');
   });
 
@@ -140,6 +144,7 @@ describe("v1 mobile accessibility states", () => {
         }}
       />,
     );
+    expect(html).toContain("최근 시세 · 실시간 연결 중");
     expect(html).toContain("연결 중");
     expect(html).not.toContain("정보 없음");
   });
