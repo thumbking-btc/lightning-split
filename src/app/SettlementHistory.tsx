@@ -153,7 +153,7 @@ export function SettlementHistoryScreen({
   onDelete,
 }: {
   readonly records: readonly SettlementHistoryRecord[];
-  readonly error?: string;
+  readonly error: string | undefined;
   readonly onClose: () => void;
   readonly onDelete: (id: string) => Promise<boolean>;
 }) {
