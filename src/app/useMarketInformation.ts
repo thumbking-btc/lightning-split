@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PriceResponseDto } from "../api/contracts";
 import {
   createUpbitTradeSubscription,
+  getMarketReconnectDelay,
   getMarketRestRefreshDelay,
   getMarketRestRefreshInterval,
   parseUpbitTradeMessage,
@@ -78,7 +79,7 @@ export function completeMarketRefresh(
   return next;
 }
 
-export function useMarketInformation(): {
+export function useMarketInformation(enabled = true): {
   readonly market: MarketInformationState;
   readonly refreshLockedSnapshot: () => Promise<PriceResponseDto>;
 } {
@@ -128,6 +129,14 @@ export function useMarketInformation(): {
   }, [refreshMarket]);
 
   useEffect(() => {
+    if (!enabled) return;
+    // Re-selecting a currency is a new active viewing session. Do not inherit
+    // the previous fallback polling delay; fetch once immediately instead.
+    lastRestRequestAtRef.current = 0;
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
     let disposed = false;
     let timer: number | undefined;
     const clearTimer = () => {
@@ -171,12 +180,14 @@ export function useMarketInformation(): {
       clearTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [livePriceActive, refreshMarket]);
+  }, [enabled, livePriceActive, refreshMarket]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
     let renderTimer: number | undefined;
     let staleTimer: number | undefined;
     let lastRenderedAt = 0;
@@ -202,6 +213,7 @@ export function useMarketInformation(): {
     const disconnect = () => {
       clearTimers();
       queuedPrice = undefined;
+      reconnectAttempt = 0;
       setStreamActive(false);
       const activeSocket = socket;
       socket = undefined;
@@ -241,6 +253,7 @@ export function useMarketInformation(): {
       const next = withLiveMarketPrice(current, price);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;
+      reconnectAttempt = 0;
       setInformation(next, "live");
       setStreamActive(true);
       scheduleStaleCheck();
@@ -259,16 +272,22 @@ export function useMarketInformation(): {
     const scheduleReconnect = () => {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (disposed || !browserIsActive()) return;
-      reconnectTimer = window.setTimeout(
-        connect,
-        REALTIME_MARKET_POLICY.reconnectDelayMs,
-      );
+      const delay = getMarketReconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(connect, delay);
     };
     const connect = () => {
       if (disposed || !browserIsActive() || socket) return;
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
-      const nextSocket = new WebSocket(REALTIME_MARKET_POLICY.websocketUrl);
+      let nextSocket: WebSocket;
+      try {
+        nextSocket = new WebSocket(REALTIME_MARKET_POLICY.websocketUrl);
+      } catch {
+        setStreamActive(false);
+        scheduleReconnect();
+        return;
+      }
       nextSocket.binaryType = "arraybuffer";
       socket = nextSocket;
       nextSocket.onopen = () => {
@@ -311,7 +330,7 @@ export function useMarketInformation(): {
       window.removeEventListener("offline", handleOffline);
       disconnect();
     };
-  }, [setInformation]);
+  }, [enabled, setInformation]);
 
   return { market, refreshLockedSnapshot };
 }

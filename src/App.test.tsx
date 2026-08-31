@@ -29,6 +29,11 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('placeholder="0"');
+    expect(html).toContain('pattern="[0-9]*"');
+    expect(html).toContain(">원</button>");
+    expect(html).toContain(">달러</button>");
+    expect(html).toContain(">sats</button>");
+    expect(html).not.toContain("₩ KRW");
     expect(html).not.toContain('value="86000"');
   });
 
@@ -86,6 +91,7 @@ describe("v1 mobile accessibility states", () => {
     expect(html).toContain('class="preview-time-card"');
     expect(html).not.toContain('class="wide-preview-item"');
     expect(html).toContain("가격 확인 시각");
+    expect(html).toContain("사람별 원화 몫");
   });
 
   it("gives live market price and premium a clear non-technical status", () => {
@@ -140,7 +146,8 @@ describe("v1 mobile accessibility states", () => {
         }}
       />,
     );
-    expect(html).toContain("일시적으로 불러올 수 없음");
+    expect(html).toContain("최근 시세 · 실시간 연결 중");
+    expect(html).toContain("연결 중");
     expect(html).not.toContain("정보 없음");
   });
 
@@ -208,7 +215,9 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("직접 확인 완료");
     expect(html).toContain("이 결제의 참여자");
-    expect(html).toContain("결제 QR이나 라이트닝 네트워크에는 포함되지 않습니다");
+    expect(html).toContain(
+      "결제 QR이나 라이트닝 네트워크에는 포함되지 않습니다",
+    );
     expect(html).toContain("완료 표시 취소");
     expect(html).not.toContain("누가 보냈나요?");
     expect(html).not.toContain("결제 요청 복사");

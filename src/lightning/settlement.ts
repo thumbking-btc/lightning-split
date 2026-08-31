@@ -29,12 +29,16 @@ export type SettlementCapability =
   | { readonly method: "lud21"; readonly verifyUrl: string }
   | { readonly method: "manual" };
 
-export function selectSettlementCapability(input: {
-  readonly verifyUrl?: string;
-}): SettlementCapability {
-  return input.verifyUrl === undefined
+export function selectSettlementCapability(
+  input: object,
+): SettlementCapability {
+  const verifyUrl =
+    "verifyUrl" in input && typeof input.verifyUrl === "string"
+      ? input.verifyUrl
+      : undefined;
+  return verifyUrl === undefined
     ? Object.freeze({ method: "manual" })
-    : Object.freeze({ method: "lud21", verifyUrl: input.verifyUrl });
+    : Object.freeze({ method: "lud21", verifyUrl });
 }
 
 export interface SettlementCheckInput {

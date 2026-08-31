@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkForPwaUpdate,
   installPwaUpdate,
+  shouldAutoInstallPreviewUpdate,
   subscribeToPwaUpdateChecks,
 } from "./pwaUpdate";
 
@@ -11,6 +12,24 @@ afterEach(() => {
 });
 
 describe("PWA update checks", () => {
+  it("auto-installs newer Preview builds but never production builds", () => {
+    expect(
+      shouldAutoInstallPreviewUpdate(
+        "refactor/stateless-invoice-issuance",
+        "updateAvailable",
+      ),
+    ).toBe(true);
+    expect(shouldAutoInstallPreviewUpdate("main", "updateAvailable")).toBe(
+      false,
+    );
+    expect(
+      shouldAutoInstallPreviewUpdate(
+        "refactor/stateless-invoice-issuance",
+        "latest",
+      ),
+    ).toBe(false);
+  });
+
   it("checks again when the app is online and visible", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const getRegistration = vi.fn().mockResolvedValue({ update });

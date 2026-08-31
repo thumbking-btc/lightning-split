@@ -1,5 +1,17 @@
 export type PwaDeploymentState = "latest" | "updateAvailable" | "unknown";
 
+export function shouldAutoInstallPreviewUpdate(
+  branch: string,
+  state: PwaDeploymentState,
+): boolean {
+  return (
+    state === "updateAvailable" &&
+    branch !== "main" &&
+    branch !== "local" &&
+    branch !== "unknown"
+  );
+}
+
 interface BuildIdentity {
   readonly version: string;
   readonly commit: string;

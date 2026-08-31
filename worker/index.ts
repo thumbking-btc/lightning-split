@@ -2,6 +2,7 @@ import type {
   ApiErrorDto,
   PriceResponseDto,
   SettlementResponseDto,
+  UsdPriceResponseDto,
 } from "../src/api/contracts";
 import {
   parseBatchInvoiceRequest,
@@ -21,8 +22,21 @@ import {
   PriceSnapshotUnavailableError,
   UpbitPriceAdapter,
 } from "../src/pricing/service";
-import { WorkerPremiumReferenceCache, WorkerPriceSnapshotCache } from "./cache";
-import { fingerprintInvoiceBatchInput } from "./invoiceBatch";
+import {
+  BinanceUsdtPremiumReferenceAdapter,
+  CoinbasePremiumService,
+  CoinbaseUsdPriceAdapter,
+  KrakenUsdPriceAdapter,
+  UsdPriceSnapshotService,
+  UsdPriceSnapshotUnavailableError,
+} from "../src/pricing/usd";
+import {
+  WorkerPremiumReferenceCache,
+  WorkerPriceSnapshotCache,
+  WorkerUsdPremiumReferenceCache,
+  WorkerUsdPriceSnapshotCache,
+} from "./cache";
+import { createInvoiceBatchResponse } from "./invoiceBatch";
 import { enforceRateLimit } from "./rateLimit";
 import { readBoundedRequestJson } from "./request";
 import {
@@ -33,8 +47,6 @@ import {
 type AppEnv = Env & {
   readonly VERIFICATION_TOKEN_SECRET?: string;
 };
-
-export { InvoiceBatchCoordinator } from "./invoiceBatch";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -80,7 +92,8 @@ function errorResponse(error: unknown, path: string): Response {
   const infrastructureError =
     error instanceof InfrastructureError
       ? error
-      : error instanceof PriceSnapshotUnavailableError
+      : error instanceof PriceSnapshotUnavailableError ||
+          error instanceof UsdPriceSnapshotUnavailableError
         ? new InfrastructureError(
             "NETWORK_ERROR",
             "현재 BTC 기준가격을 조회할 수 없습니다.",
@@ -150,6 +163,47 @@ async function handlePrice(): Promise<Response> {
   return jsonResponse(body);
 }
 
+async function handleUsdPrice(): Promise<Response> {
+  const coinbase = new CoinbaseUsdPriceAdapter();
+  const kraken = new KrakenUsdPriceAdapter();
+  const snapshot = await new UsdPriceSnapshotService(
+    coinbase,
+    kraken,
+    new WorkerUsdPriceSnapshotCache(),
+  ).getSnapshot();
+  const premium =
+    snapshot.source === "coinbase"
+      ? await new CoinbasePremiumService(
+          new BinanceUsdtPremiumReferenceAdapter(),
+          new WorkerUsdPremiumReferenceCache(),
+        )
+          .getInformation(snapshot.priceUsdCents)
+          .catch(() => undefined)
+      : undefined;
+  const body: UsdPriceResponseDto = {
+    ok: true,
+    snapshot: {
+      priceUsdCents: snapshot.priceUsdCents.toString(),
+      source: snapshot.source,
+      market: snapshot.market,
+      observedAt: snapshot.observedAt,
+      retrievedAt: snapshot.retrievedAt,
+      snapshotAt: snapshot.snapshotAt,
+      fallbackUsed: snapshot.fallbackUsed,
+    },
+    ...(premium === undefined
+      ? {}
+      : {
+          premium: {
+            basisPoints: premium.basisPoints.toString(),
+            referencePriceUsdCents: premium.referencePriceUsdCents.toString(),
+            retrievedAt: premium.retrievedAt,
+          },
+        }),
+  };
+  return jsonResponse(body);
+}
+
 function optionalVerificationSecret(env: AppEnv): string | undefined {
   return env.VERIFICATION_TOKEN_SECRET &&
     /^[0-9a-f]{64}$/u.test(env.VERIFICATION_TOKEN_SECRET)
@@ -175,29 +229,13 @@ async function handleInvoices(
   assertSameOrigin(request);
   await enforceRateLimit(request, env.INVOICE_RATE_LIMITER, "invoices");
   const input = parseBatchInvoiceRequest(await readBoundedRequestJson(request));
-  const coordinated = await env.INVOICE_BATCHES.getByName(
-    input.requestId,
-  ).issueForApi(
-    await fingerprintInvoiceBatchInput(input),
-    input,
-    optionalVerificationSecret(env),
+  const secret = optionalVerificationSecret(env);
+  return jsonResponse(
+    await createInvoiceBatchResponse(
+      input,
+      secret === undefined ? {} : { VERIFICATION_TOKEN_SECRET: secret },
+    ),
   );
-  if (!coordinated.ok) {
-    throw new InfrastructureError(
-      coordinated.error.code,
-      coordinated.error.message,
-      {
-        retryable: coordinated.error.retryable,
-        ...(coordinated.error.upstreamStatus === undefined
-          ? {}
-          : { upstreamStatus: coordinated.error.upstreamStatus }),
-        ...(coordinated.error.retryAfterSeconds === undefined
-          ? {}
-          : { retryAfterSeconds: coordinated.error.retryAfterSeconds }),
-      },
-    );
-  }
-  return jsonResponse(coordinated.response);
 }
 
 function settlementResponse(
@@ -272,6 +310,8 @@ export async function handleApiRequest(
   try {
     if (url.pathname === "/api/price" && request.method === "GET")
       return await handlePrice();
+    if (url.pathname === "/api/price/usd" && request.method === "GET")
+      return await handleUsdPrice();
     if (url.pathname === "/api/invoices" && request.method === "POST")
       return await handleInvoices(request, env);
     if (url.pathname === "/api/settlement" && request.method === "POST") {

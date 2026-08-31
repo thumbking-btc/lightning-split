@@ -605,6 +605,7 @@ button {
 }
 .card-head > div {
   display: grid;
+  min-width: 0;
   gap: 0.18rem;
 }
 .slot-number {
@@ -619,11 +620,19 @@ button {
     sans-serif;
 }
 .status-pill {
+  display: inline-grid;
+  max-width: min(62%, 17rem);
+  gap: 0.04rem;
   padding: 0.4rem 0.58rem;
-  border-radius: 99px;
+  border-radius: 1rem;
   font-size: 0.67rem;
   font-weight: 700;
-  white-space: nowrap;
+  line-height: 1.3;
+  text-align: center;
+}
+.status-line {
+  display: block;
+  min-width: 0;
 }
 .status-pill.waiting,
 .status-pill.working {
@@ -835,5 +844,20 @@ button {
     scroll-behavior: auto !important;
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .invoice-card {
+    padding: 0.9rem;
+  }
+  .card-head {
+    min-width: 0;
+    gap: 0.65rem;
+  }
+  .status-pill {
+    max-width: 58%;
+    padding: 0.38rem 0.5rem;
+    font-size: 0.64rem;
   }
 }

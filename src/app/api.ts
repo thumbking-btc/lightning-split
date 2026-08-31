@@ -224,34 +224,24 @@ export async function fetchPriceInformation(): Promise<PriceResponseDto> {
 export async function requestInvoiceBatch(
   input: BatchInvoiceRequestDto,
 ): Promise<BatchInvoiceResponseDto> {
-  let value: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      value = await parseApiResponse(
-        await fetch("/api/invoices", {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(input),
-        }),
-      );
-      break;
-    } catch (cause) {
-      const canReplay =
-        input.requestId !== undefined &&
-        (!(cause instanceof ApiClientError) ||
-          ["TIMEOUT", "NETWORK_ERROR", "HTTP_ERROR"].includes(cause.code));
-      if (attempt === 0 && canReplay) continue;
-      if (cause instanceof ApiClientError) throw cause;
-      throw new ApiClientError(
-        "NETWORK_ERROR",
-        "서버에 연결하지 못했습니다. 잠시 후 다시 시도하십시오.",
-        true,
-      );
-    }
+  let response: Response;
+  try {
+    response = await fetch("/api/invoices", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    throw new ApiClientError(
+      "ISSUANCE_UNKNOWN",
+      "결제 요청 발급 결과를 확인할 수 없습니다. 받는 지갑을 확인한 뒤 새 정산을 시작하십시오.",
+      false,
+    );
   }
+  const value = await parseApiResponse(response);
   if (
     !isRecord(value) ||
     value.ok !== true ||

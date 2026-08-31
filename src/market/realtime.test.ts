@@ -5,6 +5,7 @@ import { serializeBigIntDecimal } from "../api/serialization";
 import {
   calculatePremiumBasisPoints,
   createUpbitTradeSubscription,
+  getMarketReconnectDelay,
   getMarketRestRefreshDelay,
   getMarketRestRefreshInterval,
   parseUpbitTradeMessage,
@@ -59,11 +60,14 @@ describe("real-time market information", () => {
     ).resolves.toBeNull();
   });
 
-  it("uses the P2P calculator refresh policy without treating 60 seconds as the live price interval", () => {
+  it("uses 60-second REST backup and 15-30-60 WebSocket reconnect backoff", () => {
     expect(getMarketRestRefreshInterval(true)).toBe(60_000);
-    expect(getMarketRestRefreshInterval(false)).toBe(16_000);
-    expect(getMarketRestRefreshDelay(1_000, 16_000, 5_000)).toBe(12_000);
-    expect(getMarketRestRefreshDelay(1_000, 16_000, 20_000)).toBe(0);
+    expect(getMarketRestRefreshInterval(false)).toBe(60_000);
+    expect(getMarketRestRefreshDelay(1_000, 60_000, 5_000)).toBe(56_000);
+    expect(getMarketRestRefreshDelay(1_000, 60_000, 61_000)).toBe(0);
+    expect([0, 1, 2, 3, 20].map(getMarketReconnectDelay)).toEqual([
+      15_000, 30_000, 60_000, 60_000, 60_000,
+    ]);
   });
 
   it("builds a realtime-only KRW-BTC trade subscription", () => {

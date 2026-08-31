@@ -26,8 +26,28 @@ export interface PriceResponseDto {
   };
 }
 
+export interface UsdPriceSnapshotDto {
+  readonly priceUsdCents: string;
+  readonly source: "coinbase" | "kraken";
+  readonly market: "BTC-USD";
+  readonly observedAt: string;
+  readonly retrievedAt: string;
+  readonly snapshotAt: string;
+  readonly fallbackUsed: boolean;
+}
+
+export interface UsdPriceResponseDto {
+  readonly ok: true;
+  readonly snapshot: UsdPriceSnapshotDto;
+  readonly premium?: {
+    readonly basisPoints: string;
+    readonly referencePriceUsdCents: string;
+    readonly retrievedAt: string;
+  };
+}
+
 export interface BatchInvoiceRequestDto {
-  /** Client-generated key used to make a retried batch request idempotent. */
+  /** Client correlation key retained for compatibility; the Worker does not persist or replay it. */
   readonly requestId: string;
   readonly address: string;
   readonly slots: readonly {

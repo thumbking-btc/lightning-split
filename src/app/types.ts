@@ -1,3 +1,4 @@
+import type { UsdPriceSnapshotDto } from "../api/contracts";
 import type { PriceSnapshotDto } from "../api/serialization";
 import type {
   InputMode,
@@ -50,6 +51,7 @@ export interface LegacySettlementRecord {
 export interface HistoricalInvoiceAttempt {
   readonly slotNumber: number;
   readonly krwShare?: string;
+  readonly usdCentsShare?: string;
   readonly targetSats: string;
   readonly attempt: number;
   readonly invoice: ClientInvoice;
@@ -64,6 +66,7 @@ export interface HistoricalInvoiceAttempt {
 export interface ClientSlot {
   readonly slotNumber: number;
   readonly krwShare?: string;
+  readonly usdCentsShare?: string;
   readonly targetSats: string;
   readonly attempt: number;
   readonly status: ClientSlotStatus;
@@ -85,6 +88,7 @@ export interface SettlementSession {
   readonly version: 2;
   readonly id: string;
   readonly inputMode: InputMode;
+  /** KRW and sats are stored in whole units; USD is stored in cents. */
   readonly totalAmount: string;
   readonly totalPeople: number;
   readonly excludePayer: boolean;
@@ -93,7 +97,9 @@ export interface SettlementSession {
   readonly overallNote?: string;
   readonly participantNameCandidates: readonly string[];
   readonly priceSnapshot?: PriceSnapshotDto;
+  readonly usdPriceSnapshot?: UsdPriceSnapshotDto;
   readonly payerShareKrw?: string;
+  readonly payerShareUsdCents?: string;
   readonly payerShareSats?: string;
   readonly providerCommentStatus?: ProviderCommentStatus;
   readonly createdAt: string;
@@ -113,4 +119,6 @@ export interface SettlementProgress {
   readonly totalSats: bigint;
   readonly completedKrw: bigint;
   readonly totalKrw: bigint;
+  readonly completedUsdCents: bigint;
+  readonly totalUsdCents: bigint;
 }
