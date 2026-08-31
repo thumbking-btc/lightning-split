@@ -922,6 +922,7 @@ export function App() {
   } | null>(null);
   const sessionEpochRef = useRef(0);
   const retryOperationRef = useRef<string | undefined>(undefined);
+  const languageRef = useRef(language);
   const c = uiCopy(language);
   const priceInformation = market.information;
   const priceSnapshot = priceInformation?.snapshot;
@@ -933,6 +934,7 @@ export function App() {
       : "Enter a Lightning Address instead of a BOLT11 invoice.";
 
   useEffect(() => {
+    languageRef.current = language;
     document.documentElement.lang = language;
   }, [language]);
 
@@ -980,13 +982,13 @@ export function App() {
       })
       .catch(() =>
         setPersistenceError(
-          language === "ko"
+          languageRef.current === "ko"
             ? "저장된 정산을 불러오지 못했습니다. 이 브라우저에서는 자동 복구가 제한될 수 있습니다."
             : "Could not load the saved settlement. Automatic recovery may be limited in this browser.",
         ),
       )
       .finally(() => setRestoring(false));
-  }, [language]);
+  }, []);
 
   useEffect(() => {
     if (!session) return;
