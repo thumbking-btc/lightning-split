@@ -8,7 +8,15 @@ import {
   isLightningInvoiceInput,
   LIGHTNING_INVOICE_INPUT_MESSAGE,
 } from "./app/lightningInput";
+import { shareInvoicePaymentRequest } from "./app/invoiceShare";
 import { parseParticipantNameCandidates } from "./app/nameCandidates";
+import { SettlementHistoryScreen } from "./app/SettlementHistory";
+import {
+  archiveSettlementSession,
+  deleteSettlementHistoryRecord,
+  listSettlementHistory,
+  type SettlementHistoryRecord,
+} from "./app/settlementHistory";
 import {
   clearActiveSession,
   loadActiveSession,
@@ -174,6 +182,30 @@ export function InvoiceCard({
 }) {
   const status = slotStatus(slot);
   const [copyFeedback, setCopyFeedback] = useState<string>();
+  const [shareFeedback, setShareFeedback] = useState<string>();
+
+  const shareInvoice = async () => {
+    if (!slot.invoice) return;
+    const result = await shareInvoicePaymentRequest({
+      slotNumber: slot.slotNumber,
+      ...(slot.annotation?.displayName
+        ? { displayName: slot.annotation.displayName }
+        : {}),
+      ...(slot.krwShare ? { krwShare: slot.krwShare } : {}),
+      targetSats: slot.targetSats,
+      invoice: slot.invoice.bolt11,
+      expiresAt: slot.invoice.expiresAt,
+    });
+    setShareFeedback(
+      result === "shared"
+        ? "QR과 결제 요청을 공유했습니다."
+        : result === "copied"
+          ? "공유 기능을 사용할 수 없어 결제 요청 정보를 복사했습니다."
+          : result === "failed"
+            ? "공유하지 못했습니다. 결제 요청 복사를 사용하십시오."
+            : undefined,
+    );
+  };
 
   const copyInvoice = async () => {
     if (!slot.invoice) return;
@@ -218,7 +250,9 @@ export function InvoiceCard({
           이 결제의 참여자 <span>선택</span>
           <input
             value={slot.annotation?.displayName ?? ""}
-            onChange={(event) => onAnnotate(slot.slotNumber, event.target.value)}
+            onChange={(event) =>
+              onAnnotate(slot.slotNumber, event.target.value)
+            }
             placeholder="예: 민수"
           />
         </label>
@@ -259,9 +293,7 @@ export function InvoiceCard({
               {slot.verificationDelayed ? (
                 <>
                   <strong>자동 확인 지연</strong>
-                  <span>
-                    받는 지갑에서 직접 확인해 완료할 수 있습니다.
-                  </span>
+                  <span>받는 지갑에서 직접 확인해 완료할 수 있습니다.</span>
                 </>
               ) : slot.invoice.verificationToken ? (
                 <>
@@ -284,6 +316,16 @@ export function InvoiceCard({
               ) : (
                 <div className="qr-placeholder dormant" aria-hidden="true" />
               )}
+            </div>
+            <button
+              className="secondary-button full"
+              type="button"
+              onClick={() => void shareInvoice()}
+            >
+              QR · 결제 요청 공유
+            </button>
+            <div className="copy-feedback" aria-live="polite">
+              {shareFeedback}
             </div>
             <button
               className="secondary-button full"
@@ -666,6 +708,11 @@ export function App() {
   const [lightningAddress, setLightningAddress] = useState("");
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
+  const [historyRecords, setHistoryRecords] = useState<
+    SettlementHistoryRecord[]
+  >([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyError, setHistoryError] = useState<string>();
   const { market, refreshLockedSnapshot } = useMarketInformation();
   const [session, setSession] = useState<SettlementSession | null>(null);
   const [busy, setBusy] = useState(false);
@@ -699,6 +746,18 @@ export function App() {
   const refreshPrice = useCallback(async () => {
     return (await refreshLockedSnapshot()).snapshot;
   }, [refreshLockedSnapshot]);
+
+  const refreshHistory = useCallback(async () => {
+    const records = await listSettlementHistory();
+    setHistoryRecords(records);
+    setHistoryError(undefined);
+  }, []);
+
+  useEffect(() => {
+    void refreshHistory().catch(() =>
+      setHistoryError("이 기기에 저장된 정산 기록을 불러오지 못했습니다."),
+    );
+  }, [refreshHistory]);
 
   useEffect(() => {
     const restoreEpoch = sessionEpochRef.current;
@@ -1055,12 +1114,34 @@ export function App() {
       !window.confirm(NEW_SETTLEMENT_PENDING_CONFIRMATION)
     )
       return;
+    if (session) {
+      try {
+        await archiveSettlementSession(session);
+        await refreshHistory();
+      } catch {
+        setPersistenceError(
+          "현재 정산을 기록에 보관하지 못해 새 정산으로 넘어가지 않았습니다.",
+        );
+        return;
+      }
+    }
     await resetSession();
   };
 
   const deleteSettlementRecord = async () => {
     if (window.confirm(DELETE_SETTLEMENT_RECORD_CONFIRMATION))
       await resetSession();
+  };
+
+  const deleteHistoryRecord = async (id: string): Promise<boolean> => {
+    try {
+      await deleteSettlementHistoryRecord(id);
+      await refreshHistory();
+      return true;
+    } catch {
+      setHistoryError("이 기기에서 정산 기록을 삭제하지 못했습니다.");
+      return false;
+    }
   };
 
   const annotate = (slotNumber: number, displayName: string) => {
@@ -1190,6 +1271,17 @@ export function App() {
       </main>
     );
 
+  if (historyOpen) {
+    return (
+      <SettlementHistoryScreen
+        records={historyRecords}
+        error={historyError}
+        onClose={() => setHistoryOpen(false)}
+        onDelete={deleteHistoryRecord}
+      />
+    );
+  }
+
   if (session) {
     const progress = getSettlementProgress(session);
     const duplicateSettledSlots = duplicateSettledSlotNumbers(session);
@@ -1204,6 +1296,21 @@ export function App() {
           note={session.overallNote}
           onNewSettlement={() => void newSettlement()}
         />
+        <button
+          className="secondary-button full history-launch-button"
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+        >
+          정산 기록 보기
+          {historyRecords.length > 0
+            ? " · " + historyRecords.length + "건"
+            : ""}
+        </button>
+        {historyError && (
+          <div className="global-warning" role="alert">
+            {historyError}
+          </div>
+        )}
         {session.overallNote &&
           session.providerCommentStatus === "forwarded" && (
             <p className="provider-comment-status" role="status">
@@ -1344,6 +1451,19 @@ export function App() {
         </h1>
         <p>금액과 인원을 정하면 결제용 QR을 바로 만듭니다.</p>
       </header>
+      <button
+        className="secondary-button full history-launch-button"
+        type="button"
+        onClick={() => setHistoryOpen(true)}
+      >
+        정산 기록 보기
+        {historyRecords.length > 0 ? " · " + historyRecords.length + "건" : ""}
+      </button>
+      {historyError && (
+        <div className="global-warning" role="alert">
+          {historyError}
+        </div>
+      )}
       <section className="form-card">
         <AmountInput
           inputMode={inputMode}
