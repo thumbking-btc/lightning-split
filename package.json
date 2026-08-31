@@ -13,7 +13,6 @@
     "preview:mobile": "npm run build && wrangler dev --local --ip 0.0.0.0 --port 8787",
     "preview:tunnel": "npm run build && wrangler dev --local --tunnel",
     "build": "vite build",
-    "postbuild": "node scripts/upload-preview-alias.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
