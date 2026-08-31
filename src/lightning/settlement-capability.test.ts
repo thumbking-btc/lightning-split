@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { selectSettlementCapability } from "./settlement";
+import {
+  AUTOMATIC_SETTLEMENT_STANDARD_PRIORITY,
+  type InvoiceSettlementAdvertisement,
+  selectSettlementCapability,
+} from "./settlement-capability";
 
 describe("settlement capability selection", () => {
+  it("keeps one explicit priority list of standards eligible for this flow", () => {
+    expect(AUTOMATIC_SETTLEMENT_STANDARD_PRIORITY).toEqual(["lud21"]);
+  });
+
   it("uses LUD-21 whenever the individual invoice advertises verify", () => {
-    const callback = {
+    const callback: InvoiceSettlementAdvertisement & {
+      readonly providerDomain: string;
+    } = {
       providerDomain: "brand-new-wallet.example",
       verifyUrl: "https://brand-new-wallet.example/verify/invoice-1",
     };
@@ -16,16 +26,22 @@ describe("settlement capability selection", () => {
   });
 
   it("falls back to manual confirmation when no standard verifier is advertised", () => {
-    const callback = { providerDomain: "walletofsatoshi.com" };
+    const callback: InvoiceSettlementAdvertisement & {
+      readonly providerDomain: string;
+    } = { providerDomain: "any-wallet.example" };
 
     expect(selectSettlementCapability(callback)).toEqual({ method: "manual" });
   });
 
   it("does not special-case a provider name when its capabilities change", () => {
-    const before = { providerDomain: "walletofsatoshi.com" };
-    const after = {
-      providerDomain: "walletofsatoshi.com",
-      verifyUrl: "https://walletofsatoshi.com/verify/invoice-1",
+    const before: InvoiceSettlementAdvertisement & {
+      readonly providerDomain: string;
+    } = { providerDomain: "same-wallet.example" };
+    const after: InvoiceSettlementAdvertisement & {
+      readonly providerDomain: string;
+    } = {
+      providerDomain: "same-wallet.example",
+      verifyUrl: "https://same-wallet.example/verify/invoice-1",
     };
 
     expect(selectSettlementCapability(before)).toEqual({ method: "manual" });
