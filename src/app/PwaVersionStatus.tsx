@@ -7,11 +7,14 @@ import {
   type PwaDeploymentState,
   subscribeToPwaUpdateChecks,
 } from "./pwaUpdate";
+import { useLanguagePreference } from "./useLanguagePreference";
 
 declare const __APP_VERSION__: string;
 declare const __GIT_COMMIT__: string;
 
 export function PwaVersionStatus() {
+  const language = useLanguagePreference();
+  const korean = language === "ko";
   const [updating, setUpdating] = useState(false);
   const [deploymentState, setDeploymentState] =
     useState<PwaDeploymentState>("unknown");
@@ -56,13 +59,25 @@ export function PwaVersionStatus() {
     <div className="app-version" role="status" aria-live="polite">
       {__APP_VERSION__} · {__GIT_COMMIT__} ·{" "}
       {updateAvailable
-        ? "새 버전 사용 가능"
+        ? korean
+          ? "새 버전 사용 가능"
+          : "Update available"
         : deploymentState === "latest"
-          ? "최신"
-          : "확인 중"}
+          ? korean
+            ? "최신"
+            : "Latest"
+          : korean
+            ? "확인 중"
+            : "Checking"}
       {updateAvailable && (
         <button type="button" disabled={updating} onClick={installUpdate}>
-          {updating ? "업데이트 중…" : "업데이트"}
+          {updating
+            ? korean
+              ? "업데이트 중…"
+              : "Updating…"
+            : korean
+              ? "업데이트"
+              : "Update"}
         </button>
       )}
     </div>
