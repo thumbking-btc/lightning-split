@@ -1,0 +1,38 @@
+name: Apply and verify settlement history feature
+
+on:
+  push:
+    branches:
+      - feature/settlement-history
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - run: node scripts/apply-settlement-history-feature.mjs
+      - run: npm run format
+      - run: npm run verify
+
+      - name: Commit verified implementation
+        run: |
+          rm scripts/apply-settlement-history-feature.mjs
+          rm .github/workflows/apply-settlement-history-feature.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Implement settlement history and invoice sharing"
+          git push origin HEAD:feature/settlement-history
