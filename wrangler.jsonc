@@ -4,8 +4,6 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-08-30",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "preview_urls": true,
   "ratelimits": [
     {
       "name": "INVOICE_RATE_LIMITER",
