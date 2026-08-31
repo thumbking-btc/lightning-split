@@ -1,0 +1,32 @@
+/* Mobile containment fixes for long translated status labels. */
+.card-head {
+  min-width: 0;
+}
+
+.card-head > div {
+  min-width: 0;
+}
+
+.status-pill {
+  max-width: min(62%, 17rem);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  line-height: 1.3;
+}
+
+@media (max-width: 420px) {
+  .invoice-card {
+    padding: 0.9rem;
+  }
+
+  .card-head {
+    gap: 0.65rem;
+  }
+
+  .status-pill {
+    max-width: 58%;
+    padding: 0.38rem 0.5rem;
+    font-size: 0.64rem;
+  }
+}
