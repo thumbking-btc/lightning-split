@@ -624,7 +624,9 @@ export function MarketSummary({
           <strong>
             {information?.premium
               ? formatPremium(information.premium.basisPoints)
-              : c.premiumUnavailable}
+              : connection === "unavailable" || connection === "stale"
+                ? c.premiumUnavailable
+                : c.checking}
           </strong>
         </div>
       </div>
