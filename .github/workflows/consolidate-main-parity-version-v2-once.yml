@@ -1,0 +1,134 @@
+name: Consolidate main parity and version v2 once
+
+on:
+  push:
+    branches:
+      - refactor/stateless-invoice-issuance
+    paths:
+      - .github/workflows/consolidate-main-parity-version-v2-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/stateless-invoice-issuance
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+      - run: npm ci
+      - name: Set next release version
+        run: npm version 0.3.0 --no-git-tag-version
+      - name: Restore main UX and harden preview updates
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app = Path('src/App.tsx')
+          s = app.read_text()
+
+          import_marker = 'import { uiCopy } from "./app/i18n";\n'
+          if import_marker not in s:
+              raise SystemExit('App i18n import marker not found')
+          s = s.replace(
+              import_marker,
+              import_marker + 'import { heroLine1For } from "./app/heroCopy";\n',
+              1,
+          )
+
+          old = '  if (connection === "recent") return c.recentRest;'
+          if old not in s:
+              raise SystemExit('recent market label pattern not found')
+          s = s.replace(old, '  if (connection === "recent") return c.recent;', 1)
+
+          old = '''          >\n            ₩ KRW\n          </button>\n          <button\n            type="button"\n            className={inputMode === "usd" ? "active" : ""}\n            aria-pressed={inputMode === "usd"}\n            onClick={() => onInputModeChange("usd")}\n          >\n            $ USD\n          </button>\n          <button\n            type="button"\n            className={inputMode === "sats" ? "active" : ""}\n            aria-pressed={inputMode === "sats"}\n            onClick={() => onInputModeChange("sats")}\n          >\n            sats\n          </button>'''
+          new = '''          >\n            {c.krw}\n          </button>\n          <button\n            type="button"\n            className={inputMode === "usd" ? "active" : ""}\n            aria-pressed={inputMode === "usd"}\n            onClick={() => onInputModeChange("usd")}\n          >\n            {c.usd}\n          </button>\n          <button\n            type="button"\n            className={inputMode === "sats" ? "active" : ""}\n            aria-pressed={inputMode === "sats"}\n            onClick={() => onInputModeChange("sats")}\n          >\n            {c.sats}\n          </button>'''
+          if old not in s:
+              raise SystemExit('currency switch pattern not found')
+          s = s.replace(old, new, 1)
+
+          old = '''        <h1>\n          {c.heroLine1}\n          <br />\n          {c.heroLine2}\n        </h1>'''
+          new = '''        <h1>\n          {heroLine1For(inputMode, language)}\n          <br />\n          {c.heroLine2}\n        </h1>'''
+          if old not in s:
+              raise SystemExit('hero copy pattern not found')
+          s = s.replace(old, new, 1)
+          app.write_text(s)
+
+          Path('src/app/heroCopy.ts').write_text('''import type { InputMode } from "../domain/models";\nimport { uiCopy } from "./i18n";\nimport type { Language } from "./preferences";\n\nexport function heroLine1For(\n  inputMode: InputMode,\n  language: Language,\n): string {\n  if (language === "ko" && inputMode === "krw") return "원화 더치페이를";\n  return uiCopy(language).heroLine1;\n}\n''')
+
+          Path('src/app/heroCopy.test.ts').write_text('''import { describe, expect, it } from "vitest";\n\nimport { heroLine1For } from "./heroCopy";\n\ndescribe("hero copy parity", () => {\n  it("preserves the production KRW hero while keeping new modes neutral", () => {\n    expect(heroLine1For("krw", "ko")).toBe("원화 더치페이를");\n    expect(heroLine1For("usd", "ko")).toBe("비용을 나누고");\n    expect(heroLine1For("sats", "ko")).toBe("비용을 나누고");\n    expect(heroLine1For("krw", "en")).toBe("Split the bill.");\n  });\n});\n''')
+
+          pwa = Path('src/app/pwaUpdate.ts')
+          s = pwa.read_text()
+          marker = 'export type PwaDeploymentState = "latest" | "updateAvailable" | "unknown";\n'
+          addition = marker + '''\nexport function shouldAutoInstallPreviewUpdate(\n  branch: string,\n  state: PwaDeploymentState,\n): boolean {\n  return (\n    state === "updateAvailable" &&\n    branch !== "main" &&\n    branch !== "local" &&\n    branch !== "unknown"\n  );\n}\n'''
+          if marker not in s:
+              raise SystemExit('PWA state marker not found')
+          s = s.replace(marker, addition, 1)
+          pwa.write_text(s)
+
+          status = Path('src/app/PwaVersionStatus.tsx')
+          s = status.read_text()
+          old = '''  checkForPwaUpdate,\n  installPwaUpdate,\n  type PwaDeploymentState,\n  subscribeToPwaUpdateChecks,\n} from "./pwaUpdate";'''
+          new = '''  checkForPwaUpdate,\n  installPwaUpdate,\n  shouldAutoInstallPreviewUpdate,\n  type PwaDeploymentState,\n  subscribeToPwaUpdateChecks,\n} from "./pwaUpdate";'''
+          if old not in s:
+              raise SystemExit('PwaVersionStatus import pattern not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  const installUpdate = async () => {\n    setUpdating(true);\n    try {\n      await refreshDeploymentState();\n      if (await installPwaUpdate()) window.location.reload();\n    } finally {\n      setUpdating(false);\n    }\n  };\n\n  const updateAvailable = needRefresh || deploymentState === "updateAvailable";'''
+          new = '''  const installUpdate = useCallback(async () => {\n    setUpdating(true);\n    try {\n      await refreshDeploymentState();\n      if (await installPwaUpdate()) window.location.reload();\n    } finally {\n      setUpdating(false);\n    }\n  }, [refreshDeploymentState]);\n\n  const previewUpdateAttemptedRef = useRef(false);\n  useEffect(() => {\n    if (!shouldAutoInstallPreviewUpdate(__APP_BRANCH__, deploymentState)) {\n      previewUpdateAttemptedRef.current = false;\n      return;\n    }\n    if (previewUpdateAttemptedRef.current) return;\n    previewUpdateAttemptedRef.current = true;\n    void installUpdate();\n  }, [deploymentState, installUpdate]);\n\n  const updateAvailable = needRefresh || deploymentState === "updateAvailable";'''
+          if old not in s:
+              raise SystemExit('installUpdate pattern not found')
+          s = s.replace(old, new, 1)
+          status.write_text(s)
+
+          test = Path('src/App.test.tsx')
+          s = test.read_text()
+          old = '''    expect(html).toContain('aria-pressed="true"');\n    expect(html).toContain('placeholder="0"');\n    expect(html).not.toContain('value="86000"');\n  });'''
+          new = '''    expect(html).toContain('aria-pressed="true"');\n    expect(html).toContain('placeholder="0"');\n    expect(html).toContain(">원</button>");\n    expect(html).toContain(">달러</button>");\n    expect(html).toContain(">sats</button>");\n    expect(html).not.toContain("₩ KRW");\n    expect(html).not.toContain('value="86000"');\n  });'''
+          if old not in s:
+              raise SystemExit('AmountInput test pattern not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    expect(html).toContain("연결 중");\n    expect(html).not.toContain("정보 없음");'''
+          new = '''    expect(html).toContain("최근 시세 · 실시간 연결 중");\n    expect(html).toContain("연결 중");\n    expect(html).not.toContain("정보 없음");'''
+          if old not in s:
+              raise SystemExit('recent market test pattern not found')
+          s = s.replace(old, new, 1)
+          test.write_text(s)
+
+          pwa_test = Path('src/app/PwaVersionStatus.test.ts')
+          s = pwa_test.read_text()
+          old = '''  checkForPwaUpdate,\n  installPwaUpdate,\n  subscribeToPwaUpdateChecks,\n} from "./pwaUpdate";'''
+          new = '''  checkForPwaUpdate,\n  installPwaUpdate,\n  shouldAutoInstallPreviewUpdate,\n  subscribeToPwaUpdateChecks,\n} from "./pwaUpdate";'''
+          if old not in s:
+              raise SystemExit('PWA test import pattern not found')
+          s = s.replace(old, new, 1)
+          marker = 'describe("PWA update checks", () => {\n'
+          addition = marker + '''  it("auto-installs newer Preview builds but never production builds", () => {\n    expect(\n      shouldAutoInstallPreviewUpdate(\n        "refactor/stateless-invoice-issuance",\n        "updateAvailable",\n      ),\n    ).toBe(true);\n    expect(shouldAutoInstallPreviewUpdate("main", "updateAvailable")).toBe(\n      false,\n    );\n    expect(\n      shouldAutoInstallPreviewUpdate(\n        "refactor/stateless-invoice-issuance",\n        "latest",\n      ),\n    ).toBe(false);\n  });\n\n'''
+          if marker not in s:
+              raise SystemExit('PWA describe marker not found')
+          s = s.replace(marker, addition, 1)
+          pwa_test.write_text(s)
+
+          Path('src/app/productionShell.test.ts').write_text('''import { readFileSync } from "node:fs";\n\nimport { describe, expect, it } from "vitest";\n\ndescribe("production shell parity", () => {\n  it("keeps the production brand and installed-app assets", () => {\n    const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");\n    expect(html).toContain('/brand-fix.css');\n    expect(html).toContain('/lightning-split.jpg');\n    expect(html).toContain('/apple-touch-icon.png');\n  });\n\n  it("keeps the production update status and creator support surfaces mounted", () => {\n    const main = readFileSync(new URL("../main.tsx", import.meta.url), "utf8");\n    expect(main).toContain('<PwaVersionStatus />');\n    expect(main).toContain('<CreatorContact />');\n  });\n});\n''')
+          PY
+      - run: npm run format
+      - run: npm run verify
+      - name: Show verified build identity
+        run: cat dist/build.json
+      - name: Commit verified consolidation
+        run: |
+          rm .github/workflows/consolidate-main-parity-version-once.yml
+          rm .github/workflows/consolidate-main-parity-version-v2-once.yml
+          git config user.name "qozm515"
+          git config user.email "46486213+qozm515@users.noreply.github.com"
+          git add package.json package-lock.json src/App.tsx src/App.test.tsx src/app/heroCopy.ts src/app/heroCopy.test.ts src/app/pwaUpdate.ts src/app/PwaVersionStatus.tsx src/app/PwaVersionStatus.test.ts src/app/productionShell.test.ts .github/workflows/consolidate-main-parity-version-once.yml .github/workflows/consolidate-main-parity-version-v2-once.yml
+          git commit -m "Preserve main UX and establish v0.3.0 preview versioning"
+          git push origin HEAD:refactor/stateless-invoice-issuance
