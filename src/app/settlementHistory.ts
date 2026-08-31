@@ -43,7 +43,9 @@ export interface SettlementHistoryRecord {
   readonly slots: readonly SettlementHistorySlot[];
 }
 
-function serializeDatabaseOperation<T>(operation: () => Promise<T>): Promise<T> {
+function serializeDatabaseOperation<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
   const result = databaseOperationTail.then(operation);
   databaseOperationTail = result.then(
     () => undefined,
@@ -140,7 +142,8 @@ function isHistorySlot(value: unknown): value is SettlementHistorySlot {
   return (
     Number.isSafeInteger(value.slotNumber) &&
     Number(value.slotNumber) > 0 &&
-    (value.displayName === undefined || typeof value.displayName === "string") &&
+    (value.displayName === undefined ||
+      typeof value.displayName === "string") &&
     (value.krwShare === undefined ||
       isCanonicalPositiveDecimal(value.krwShare)) &&
     isCanonicalPositiveDecimal(value.targetSats) &&
@@ -169,7 +172,8 @@ function isHistoryRecord(value: unknown): value is SettlementHistoryRecord {
     typeof value.excludePayer === "boolean" &&
     Number.isSafeInteger(value.invoiceCount) &&
     Number(value.invoiceCount) >= 1 &&
-    (value.overallNote === undefined || typeof value.overallNote === "string") &&
+    (value.overallNote === undefined ||
+      typeof value.overallNote === "string") &&
     (value.payerShareKrw === undefined ||
       isCanonicalPositiveDecimal(value.payerShareKrw)) &&
     (value.payerShareSats === undefined ||
@@ -196,9 +200,9 @@ export function archiveSettlementSession(
     await transaction.store.put(record);
 
     const stored = await transaction.store.getAll();
-    const validRecords = stored.filter(isHistoryRecord).sort((a, b) =>
-      b.createdAt.localeCompare(a.createdAt),
-    );
+    const validRecords = stored
+      .filter(isHistoryRecord)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const invalid of stored.filter((value) => !isHistoryRecord(value))) {
       if (isRecord(invalid) && typeof invalid.id === "string") {
         await transaction.store.delete(invalid.id);

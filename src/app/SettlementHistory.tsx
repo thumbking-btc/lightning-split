@@ -82,8 +82,7 @@ function SettlementHistoryDetail({
     <main className="app-shell history-screen">
       <header className="history-header">
         <button className="history-back" type="button" onClick={onBack}>
-          ←
-          <span className="sr-only">정산 기록 목록으로</span>
+          ←<span className="sr-only">정산 기록 목록으로</span>
         </button>
         <div>
           <span className="eyebrow">정산 기록</span>
@@ -130,9 +129,9 @@ function SettlementHistoryDetail({
       </section>
 
       <div className="history-safety-note">
-        과거 기록에는 결제용 QR과 Lightning invoice 원문을 보관하지 않습니다.
-        이 화면의 기록은 과거 결제 요청을 다시 결제하거나 공유하는 용도로 사용할
-        수 없습니다.
+        과거 기록에는 결제용 QR과 Lightning invoice 원문을 보관하지 않습니다. 이
+        화면의 기록은 과거 결제 요청을 다시 결제하거나 공유하는 용도로 사용할 수
+        없습니다.
       </div>
 
       <button
@@ -184,8 +183,7 @@ export function SettlementHistoryScreen({
     <main className="app-shell history-screen">
       <header className="history-header">
         <button className="history-back" type="button" onClick={onClose}>
-          ←
-          <span className="sr-only">정산 화면으로</span>
+          ←<span className="sr-only">정산 화면으로</span>
         </button>
         <div>
           <span className="eyebrow">LOCAL HISTORY</span>
@@ -223,7 +221,9 @@ export function SettlementHistoryScreen({
                     onClick={() => setSelectedId(record.id)}
                   >
                     <div>
-                      <span>{record.overallNote || `${record.totalPeople}명 정산`}</span>
+                      <span>
+                        {record.overallNote || `${record.totalPeople}명 정산`}
+                      </span>
                       <strong>{formatRecordAmount(record)}</strong>
                       <small>{shortDate(record.createdAt)}</small>
                     </div>

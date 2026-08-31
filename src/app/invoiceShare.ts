@@ -63,7 +63,10 @@ export async function shareInvoicePaymentRequest(
   input: InvoiceShareInput,
 ): Promise<InvoiceShareResult> {
   const text = buildInvoiceShareText(input);
-  if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function"
+  ) {
     try {
       const file = await createQrFile(input.invoice);
       if (

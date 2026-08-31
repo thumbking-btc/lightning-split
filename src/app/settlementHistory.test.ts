@@ -94,8 +94,12 @@ describe("settlement history", () => {
   });
 
   it("lists newest settlements first and deletes one record", async () => {
-    await archiveSettlementSession(session("older", "2030-08-01T12:00:00.000Z"));
-    await archiveSettlementSession(session("newer", "2030-08-31T12:00:00.000Z"));
+    await archiveSettlementSession(
+      session("older", "2030-08-01T12:00:00.000Z"),
+    );
+    await archiveSettlementSession(
+      session("newer", "2030-08-31T12:00:00.000Z"),
+    );
 
     expect((await listSettlementHistory()).map((record) => record.id)).toEqual([
       "newer",
