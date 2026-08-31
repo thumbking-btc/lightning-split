@@ -3,16 +3,15 @@ name: Verify i18n currency
 on:
   push:
     branches:
-      - feature/i18n-currency
+      - "feature/**"
+      - "refactor/**"
   pull_request:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: verify-i18n-${{ github.ref }}
+  group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
