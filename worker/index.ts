@@ -54,6 +54,8 @@ const JSON_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 } as const;
 
+const UPBIT_MARKET_STREAM_URL = "https://api.upbit.com/websocket/v1";
+
 function jsonResponse<T>(
   value: T,
   status = 200,
@@ -204,6 +206,27 @@ async function handleUsdPrice(): Promise<Response> {
   return jsonResponse(body);
 }
 
+async function handleKrwMarketStream(request: Request): Promise<Response> {
+  assertSameOrigin(request);
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return jsonResponse<ApiErrorDto>(
+      {
+        ok: false,
+        error: {
+          code: "INVALID_INPUT",
+          message: "A WebSocket upgrade is required.",
+          retryable: false,
+        },
+      },
+      426,
+    );
+  }
+
+  const headers = new Headers(request.headers);
+  headers.delete("origin");
+  return await fetch(UPBIT_MARKET_STREAM_URL, { headers });
+}
+
 function optionalVerificationSecret(env: AppEnv): string | undefined {
   return env.VERIFICATION_TOKEN_SECRET &&
     /^[0-9a-f]{64}$/u.test(env.VERIFICATION_TOKEN_SECRET)
@@ -312,6 +335,8 @@ export async function handleApiRequest(
       return await handlePrice();
     if (url.pathname === "/api/price/usd" && request.method === "GET")
       return await handleUsdPrice();
+    if (url.pathname === "/api/market/krw/stream" && request.method === "GET")
+      return await handleKrwMarketStream(request);
     if (url.pathname === "/api/invoices" && request.method === "POST")
       return await handleInvoices(request, env);
     if (url.pathname === "/api/settlement" && request.method === "POST") {

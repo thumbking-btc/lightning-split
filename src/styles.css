@@ -99,6 +99,9 @@ button {
 .market-values span {
   font-size: 0.65rem;
 }
+.market-values small {
+  font-size: 0.6rem;
+}
 .market-values strong {
   overflow: hidden;
   color: var(--ink);
@@ -134,25 +137,18 @@ button {
   line-height: 1.65;
 }
 .brand-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: 2.7rem;
   height: 2.7rem;
   border-radius: 0.9rem;
-  color: var(--ink);
   background: var(--gold);
-  font:
-    700 1.55rem/1 -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  object-fit: cover;
 }
 .brand-mark.large {
   width: 3.5rem;
   height: 3.5rem;
   margin-bottom: 1.25rem;
   border-radius: 1.1rem;
-  font-size: 2rem;
 }
 .eyebrow {
   color: #8a6b2b;

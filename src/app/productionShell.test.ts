@@ -11,6 +11,10 @@ describe("production shell parity", () => {
     expect(html).toContain("/brand-fix.css");
     expect(html).toContain("/lightning-split.jpg");
     expect(html).toContain("/apple-touch-icon.png");
+
+    const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+    expect(app).toContain('src="/lightning-split.jpg"');
+    expect(app).not.toContain('<div className="brand-mark">ϟ</div>');
   });
 
   it("keeps the production update status and creator support surfaces mounted", () => {
