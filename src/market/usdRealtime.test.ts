@@ -80,4 +80,28 @@ describe("Coinbase realtime BTC/USD", () => {
     expect(updated.snapshot.priceUsdCents).toBe("10100000");
     expect(updated.premium?.basisPoints).toBe("0");
   });
+
+  it("shows the first Coinbase ticker before the REST premium finishes", () => {
+    const updated = withLiveUsdMarketPrice(
+      undefined,
+      {
+        priceUsdCents: 10_100_000n,
+        observedAtMs: Date.parse("2030-01-01T00:00:09.000Z"),
+      },
+      Date.parse("2030-01-01T00:00:10.000Z"),
+    );
+
+    expect(updated).toEqual({
+      ok: true,
+      snapshot: {
+        priceUsdCents: "10100000",
+        source: "coinbase",
+        market: "BTC-USD",
+        observedAt: "2030-01-01T00:00:09.000Z",
+        retrievedAt: "2030-01-01T00:00:10.000Z",
+        snapshotAt: "2030-01-01T00:00:10.000Z",
+        fallbackUsed: false,
+      },
+    });
+  });
 });

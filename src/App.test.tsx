@@ -28,6 +28,7 @@ describe("v1 mobile accessibility states", () => {
       />,
     );
     expect(html).toContain('aria-pressed="true"');
+    expect(html).not.toContain('disabled=""');
     expect(html).toContain('placeholder="0"');
     expect(html).toContain('pattern="[0-9]*"');
     expect(html).toContain(">원</button>");
@@ -121,14 +122,23 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("162,345,000원");
     expect(html).toContain("+1.82%");
+    expect(html).toContain("업비트 프리미엄");
+    expect(html).not.toContain("김치프리미엄");
     expect(html).toContain("5분마다 갱신");
     expect(html).toContain("실시간");
     expect(html).not.toContain("upbit");
     expect(html).not.toContain("fallback");
 
+    const enKrwHtml = renderToStaticMarkup(
+      <MarketSummary language="en" market={{ connection: "loading" }} />,
+    );
+    expect(enKrwHtml).toContain("Upbit Premium");
+    expect(enKrwHtml).not.toContain("Kimchi Premium");
+
     const usdHtml = renderToStaticMarkup(
       <MarketSummary
         currency="usd"
+        language="en"
         market={{ connection: "loading" }}
         usdMarket={{
           connection: "live",
@@ -153,7 +163,19 @@ describe("v1 mobile accessibility states", () => {
       />,
     );
     expect(usdHtml).toContain("Coinbase Premium");
-    expect(usdHtml).toContain("5분마다 갱신");
+    expect(usdHtml).not.toContain("Upbit Premium");
+    expect(usdHtml).toContain("Updated every 5 min");
+
+    const koUsdHtml = renderToStaticMarkup(
+      <MarketSummary
+        currency="usd"
+        language="ko"
+        market={{ connection: "loading" }}
+        usdMarket={{ connection: "connecting" }}
+      />,
+    );
+    expect(koUsdHtml).toContain("코인베이스 프리미엄");
+    expect(koUsdHtml).not.toContain("Coinbase Premium");
   });
 
   it("explains a temporarily unavailable premium without implying a permanent absence", () => {

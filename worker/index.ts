@@ -25,9 +25,9 @@ import {
   UpbitPriceAdapter,
 } from "../src/pricing/service";
 import {
-  BinanceUsdtPremiumReferenceAdapter,
   CoinbasePremiumService,
   CoinbaseUsdPriceAdapter,
+  InternationalUsdPremiumReferenceAdapter,
   KrakenUsdPriceAdapter,
   UsdPriceSnapshotService,
   UsdPriceSnapshotUnavailableError,
@@ -191,11 +191,30 @@ async function handleUsdPrice(): Promise<Response> {
   const premium =
     snapshot.source === "coinbase"
       ? await new CoinbasePremiumService(
-          new BinanceUsdtPremiumReferenceAdapter(),
+          new InternationalUsdPremiumReferenceAdapter(),
           new WorkerUsdPremiumReferenceCache(),
         )
           .getInformation(snapshot.priceUsdCents)
-          .catch(() => undefined)
+          .catch((error: unknown) => {
+            const causes =
+              error instanceof AggregateError
+                ? error.errors.map((cause: unknown) =>
+                    cause instanceof InfrastructureError
+                      ? {
+                          code: cause.code,
+                          upstreamStatus: cause.upstreamStatus,
+                        }
+                      : { type: "unknown" },
+                  )
+                : [];
+            console.error(
+              JSON.stringify({
+                message: "usd_premium_reference_failed",
+                causes,
+              }),
+            );
+            return undefined;
+          })
       : undefined;
   const body: UsdPriceResponseDto = {
     ok: true,

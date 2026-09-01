@@ -102,14 +102,13 @@ export async function parseCoinbaseTickerMessage(
 }
 
 export function withLiveUsdMarketPrice(
-  information: UsdPriceResponseDto,
+  information: UsdPriceResponseDto | undefined,
   price: LiveUsdMarketPrice,
   retrievedAtMs = Date.now(),
 ): UsdPriceResponseDto {
   const observedAt = new Date(price.observedAtMs).toISOString();
   const retrievedAt = new Date(retrievedAtMs).toISOString();
   const snapshot: UsdPriceSnapshotDto = {
-    ...information.snapshot,
     priceUsdCents: price.priceUsdCents.toString(),
     source: "coinbase",
     market: "BTC-USD",
@@ -121,7 +120,7 @@ export function withLiveUsdMarketPrice(
   return Object.freeze({
     ok: true,
     snapshot,
-    ...(information.premium ? { premium: information.premium } : {}),
+    ...(information?.premium ? { premium: information.premium } : {}),
   });
 }
 
