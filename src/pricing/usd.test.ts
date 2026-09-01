@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Fetcher } from "../infrastructure/http";
 import {
-  BinanceUsdtPremiumReferenceAdapter,
+  InternationalUsdPremiumReferenceAdapter,
   CoinbasePremiumService,
   CoinbaseUsdPriceAdapter,
   KrakenUsdPriceAdapter,
@@ -150,7 +150,7 @@ describe("BTC/USD provider adapters", () => {
     const fetcher: Fetcher = vi.fn(() =>
       Promise.resolve(jsonResponse({ symbol: "BTCUSDT", price: "100000.005" })),
     );
-    const observation = await new BinanceUsdtPremiumReferenceAdapter(
+    const observation = await new InternationalUsdPremiumReferenceAdapter(
       fetcher,
       undefined,
       () => NOW,
@@ -161,6 +161,29 @@ describe("BTC/USD provider adapters", () => {
       observedAtMs: NOW,
       retrievedAtMs: NOW,
     });
+  });
+
+  it("falls back to OKX BTC-USDT when Binance is unavailable", async () => {
+    const fetcher: Fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(new Response(null, { status: 451 }))
+      .mockResolvedValueOnce(new Response(null, { status: 451 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          code: "0",
+          data: [{ instId: "BTC-USDT", last: "99999.995" }],
+        }),
+      );
+
+    const observation = await new InternationalUsdPremiumReferenceAdapter(
+      fetcher,
+      undefined,
+      () => NOW,
+    ).fetchObservation();
+
+    expect(observation.priceUsdCents).toBe(10_000_000n);
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 });
 

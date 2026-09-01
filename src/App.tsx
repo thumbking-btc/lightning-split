@@ -635,7 +635,7 @@ export function MarketSummary({
           </strong>
         </div>
         <div>
-          <span>{usingUsd ? c.coinbasePremium : c.kimchiPremium}</span>
+          <span>{usingUsd ? c.coinbasePremium : c.upbitPremium}</span>
           <strong>
             {information?.premium
               ? formatPremium(information.premium.basisPoints)
@@ -984,17 +984,7 @@ export function App() {
   };
 
   const changeInputMode = (next: InputMode) => {
-    if (next === inputMode) {
-      if (next === "krw") {
-        prepareKrwMarket();
-        void refreshLockedSnapshot().catch(() => undefined);
-      }
-      if (next === "usd") {
-        prepareUsdMarket();
-        void refreshLockedUsdSnapshot().catch(() => undefined);
-      }
-      return;
-    }
+    if (next === inputMode) return;
     if (next === "krw") prepareKrwMarket();
     if (next === "usd") prepareUsdMarket();
     setInputMode(next);

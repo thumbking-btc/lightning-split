@@ -370,7 +370,6 @@ export function useUsdMarketInformation(enabled = true): {
       queuedPrice = undefined;
       if (!price || disposed || !browserIsActive()) return;
       const current = informationRef.current;
-      if (!current) return;
       const next = withLiveUsdMarketPrice(current, price);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;

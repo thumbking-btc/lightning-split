@@ -251,7 +251,7 @@ export class KrakenUsdPriceAdapter implements UsdPriceSourceAdapter {
   }
 }
 
-export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAdapter {
+export class InternationalUsdPremiumReferenceAdapter implements UsdPremiumReferenceAdapter {
   constructor(
     private readonly fetcher: Fetcher = fetch,
     private readonly policy: PricePolicy = DEFAULT_PRICE_POLICY,
@@ -264,6 +264,7 @@ export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAd
       "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
       "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
       "https://api1.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+      "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT",
     ] as const) {
       try {
         const response = await fetchBoundedJson(
@@ -272,18 +273,29 @@ export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAd
           this.fetcher,
           this.clock,
         );
-        if (!isRecord(response.value) || response.value.symbol !== "BTCUSDT") {
+        const binancePrice =
+          isRecord(response.value) && response.value.symbol === "BTCUSDT"
+            ? response.value.price
+            : undefined;
+        const okxPrice =
+          isRecord(response.value) &&
+          response.value.code === "0" &&
+          Array.isArray(response.value.data) &&
+          response.value.data.length === 1 &&
+          isRecord(response.value.data[0]) &&
+          response.value.data[0].instId === "BTC-USDT"
+            ? response.value.data[0].last
+            : undefined;
+        const price = binancePrice ?? okxPrice;
+        if (price === undefined) {
           throw new InfrastructureError(
             "INVALID_RESPONSE",
-            "Binance BTC-USDT ticker is invalid.",
+            "The international BTC-USDT ticker is invalid.",
           );
         }
         const retrievedAtMs = this.clock();
         return Object.freeze({
-          priceUsdCents: parseUsdCents(
-            response.value.price,
-            "Binance BTC-USDT price",
-          ),
+          priceUsdCents: parseUsdCents(price, "International BTC-USDT price"),
           observedAtMs: retrievedAtMs,
           retrievedAtMs,
         });
@@ -293,7 +305,7 @@ export class BinanceUsdtPremiumReferenceAdapter implements UsdPremiumReferenceAd
     }
     throw new AggregateError(
       errors,
-      "No Binance BTC-USDT premium reference was available.",
+      "No international BTC-USDT premium reference was available.",
     );
   }
 }
