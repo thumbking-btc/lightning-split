@@ -61,6 +61,8 @@ const SESSION: SettlementSession = {
         payeeNodeId: `02${"11".repeat(32)}`,
         featureBits: [],
         providerDomain: "wallet.example",
+        payerMemo: "full",
+        payeeMemo: "full",
         verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
       },
       annotation: {
@@ -83,6 +85,11 @@ describe("local settlement persistence", () => {
     };
     delete corrupted.slots[0]?.invoice;
     expect(() => restoreSession(JSON.stringify(corrupted))).toThrowError();
+    const invalidMemo = JSON.parse(serializeSession(SESSION)) as {
+      slots: Array<{ invoice?: { payerMemo?: string } }>;
+    };
+    invalidMemo.slots[0]!.invoice!.payerMemo = "guessed";
+    expect(() => restoreSession(JSON.stringify(invalidMemo))).toThrowError();
     const unverifiedSettlement = JSON.parse(serializeSession(SESSION)) as {
       slots: Array<Record<string, unknown>>;
     };

@@ -265,6 +265,17 @@ export async function generateInvoiceBatch(
             expiresAt: new Date(validated.expiresAt * 1_000).toISOString(),
             payeeNodeId: validated.payeeNodeId,
             featureBits: validated.featureBits,
+            payerMemo:
+              input.providerComment !== undefined &&
+              validated.description === input.providerComment
+                ? "full"
+                : "none",
+            payeeMemo:
+              input.providerComment === undefined || !callback.commentSent
+                ? "none"
+                : providerComment.truncated
+                  ? "partial"
+                  : "full",
             disposable: callback.disposable,
             ...(settlementCapability.method === "lud21"
               ? { verifyUrl: settlementCapability.verifyUrl }

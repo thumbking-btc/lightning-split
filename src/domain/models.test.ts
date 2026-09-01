@@ -41,6 +41,8 @@ describe("domain model", () => {
         expiresAt: "2023-11-14T23:13:20.000Z",
         payeeNodeId: `02${"11".repeat(32)}`,
         featureBits: [17],
+        payerMemo: "none",
+        payeeMemo: "none",
         provider: {
           domain: "wallet.example",
           discoveryUrl: "https://wallet.example/.well-known/lnurlp/user",

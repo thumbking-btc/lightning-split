@@ -1,6 +1,6 @@
 # 자동 결제 확인 표준 조사
 
-기준일은 2026-08-31입니다. 이 문서는 Lightning Split이 결제 완료를 알아낼 수 있는 공개 표준과 제안을 표준 계열별로 전수 검토한 결과를 기록합니다. 지갑 이름이나 provider domain별 예외 목록은 조사·선택 기준으로 사용하지 않습니다.
+기준일은 2026-09-01입니다. 이 문서는 Lightning Split이 결제 완료를 알아낼 수 있는 공개 표준과 제안을 표준 계열별로 전수 검토한 결과를 기록합니다. 지갑 이름이나 provider domain별 예외 목록은 조사·선택 기준으로 사용하지 않습니다.
 
 ## 결론
 
@@ -12,7 +12,20 @@
 
 셋 모두 없는 raw BOLT11 결제에서는 payment hash만 아는 제3자 앱이 결제 여부를 알아낼 수 없습니다. Lightning에는 제3자가 조회할 수 있는 전역 원장이 없기 때문입니다.
 
-현재 제품 흐름은 `Lightning Address 입력 → 앱이 invoice 발급 → 다른 기기의 일반 지갑이 raw BOLT11 QR 결제`입니다. 이 흐름을 그대로 유지하면서 적용할 수 있는 완성 표준은 LUD-21뿐입니다. 따라서 현재 production selector는 `LUD-21 → 수동 확인`이며, provider별 분기는 두지 않습니다.
+현재 제품 흐름은 `Lightning Address 입력 → 앱이 invoice 발급 → 다른 기기의 일반 지갑이 raw BOLT11 QR 결제`입니다. 이 흐름을 그대로 유지하면서 적용할 수 있는 완성 자동 확인 표준은 LUD-21뿐입니다. 따라서 자동 확인 adapter는 `LUD-21 → 수동 확인`이며, provider별 분기는 두지 않습니다. 이 자동 확인 adapter의 결과는 아래의 여섯 단계 제품 capability 체에서 메모 증거와 함께 평가됩니다.
+
+## 제품 capability 체
+
+| 우선순위 | 판정 조건                                            |
+| -------- | ---------------------------------------------------- |
+| 1        | 자동 확인 가능 + 송신자 메모 full + 수신자 메모 full |
+| 2        | 자동 확인 가능 + 한쪽 메모만 full                    |
+| 3        | 자동 확인 가능                                       |
+| 4        | 자동 확인 불가 + 송신자 메모 full + 수신자 메모 full |
+| 5        | 자동 확인 불가 + 한쪽 메모만 full                    |
+| 6        | 자동 확인 불가 + full 메모 없음                      |
+
+송신자와 수신자 중 어느 쪽 메모인지는 우선순위를 바꾸지 않습니다. 송신자 메모는 최종 BOLT11 inline `d`가 요청한 전체 메모와 정확히 일치할 때만 `full`입니다. 수신자 메모는 LUD-12 comment 전체가 callback에 포함된 경우에만 `full`입니다. 잘린 LUD-12 comment는 `partial`로 보존하되 상위 단계 판정에는 사용하지 않습니다. 이는 규격 경로로 메모가 운반되었다는 증거이며 각 지갑 거래내역 화면에 표시된다는 보증은 아닙니다.
 
 ## 등급 기준
 
@@ -28,7 +41,7 @@
 
 | 등급 | 표준·방식                                                                                                | 상태                                      | 필요한 조건                                                                             | 확인 신호                             | 현재 결정                                        |
 | ---- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------ |
-| A    | [LUD-21 `verify`](https://github.com/lnurl/luds/blob/luds/21.md)                                         | LNURL 병합 규격, optional                 | callback이 invoice별 `verify`를 광고                                                    | `settled`, 동일 `pr`, preimage        | production 자동 확인                             |
+| A    | [LUD-21 `verify`](https://github.com/lnurl/luds/blob/luds/21.md)                                         | LNURL 병합 규격, optional                 | callback 응답에 invoice별 `verify`가 포함됨                                             | `settled`, 동일 `pr`, preimage        | production 자동 확인                             |
 | B    | [NIP-47 NWC](https://github.com/nostr-protocol/nips/blob/master/47.md) `make_invoice` + `lookup_invoice` | draft, optional                           | 정산자가 수취 지갑을 먼저 연결하고 해당 method 권한을 부여                              | 인증된 지갑의 상태·preimage           | 별도 연결형 기능 후보                            |
 | B    | [NWC-02 `payment_received`](https://github.com/nostr-wallet-connect/nwc/blob/main/02.md)                 | draft, optional                           | NWC 연결과 notification capability                                                      | 암호화된 invoice별 수신 알림·preimage | NWC 조회의 push 보조 후보                        |
 | B    | [BIP-321 `pop`/`req-pop`](https://github.com/bitcoin/bips/blob/master/bip-0321.mediawiki)                | Complete                                  | 결제 앱과 호출 앱이 같은 기기에 있고, 호출 앱이 로컬 URI handler이며, 지갑이 PoP를 지원 | BOLT11 payment preimage 반환          | 현재 교차 기기 PWA에는 부적합                    |
@@ -61,7 +74,7 @@ BIP-321은 이번 조사에서 기존 문서가 놓친 실제 결제 확인 표�
 
 ### NWC
 
-NWC는 provider 도메인을 분기하지 않고 wallet service가 광고한 `make_invoice`, `lookup_invoice`, notification capability를 선택할 수 있습니다. 확인 품질은 좋지만 사용자가 connection URI와 권한을 먼저 제공해야 합니다. 이는 Lightning Address만 입력하는 현재 흐름의 fallback이 아니라 별도 수취 지갑 연결 기능입니다.
+NWC는 provider 도메인을 분기하지 않고 wallet service가 제공한다고 밝힌 `make_invoice`, `lookup_invoice`, notification capability를 선택할 수 있습니다. 확인 품질은 좋지만 사용자가 connection URI와 권한을 먼저 제공해야 합니다. 이는 Lightning Address만 입력하는 현재 흐름의 fallback이 아니라 별도 수취 지갑 연결 기능입니다.
 
 ## 코드 선택 규칙
 
@@ -72,7 +85,7 @@ NWC는 provider 도메인을 분기하지 않고 wallet service가 광고한 `ma
 5. 어떤 규격도 적격하지 않거나 검증이 실패하면 자동 완료하지 않고 수동 확인으로 내려갑니다.
 6. draft·미병합 제안은 문서에서 추적하되 production registry에 넣지 않습니다.
 
-현재 주소 발급형 registry에는 LUD-21 하나만 있습니다. 목록이 짧아서가 아니라, 위 조건을 모두 통과한 production 표준만 등록하기 때문입니다. 향후 표준이 추가되면 provider 분기가 아니라 독립 adapter 하나와 capability contract test를 추가합니다.
+현재 주소 발급형 자동 확인 registry에는 LUD-21 하나만 있습니다. 목록이 짧아서가 아니라, 위 조건을 모두 통과한 production 표준만 등록하기 때문입니다. 그 결과와 메모 증거는 별도의 여섯 단계 제품 capability registry가 조합합니다. 향후 표준이 추가되면 provider 분기가 아니라 독립 adapter 하나와 capability contract test를 추가합니다.
 
 ## 조사 범위
 

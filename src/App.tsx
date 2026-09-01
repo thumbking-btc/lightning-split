@@ -72,6 +72,7 @@ import { useSettlementPolling } from "./app/useSettlementPolling";
 import { DEFAULT_LIGHTNING_POLICY } from "./config/policies";
 import type { InputMode } from "./domain/models";
 import { MAX_PEOPLE, MIN_PEOPLE } from "./domain/money";
+import { selectPaymentCapability } from "./lightning/settlement-capability";
 import "./styles.css";
 
 function formatInteger(value: bigint, language: Language = "ko"): string {
@@ -273,6 +274,13 @@ export function InvoiceCard({
   const status = slotStatus(slot, language);
   const statusLines = status.label.split(" · ");
   const [copyFeedback, setCopyFeedback] = useState<string>();
+  const paymentCapability = slot.invoice
+    ? selectPaymentCapability({
+        automaticSettlement: slot.invoice.verificationToken !== undefined,
+        payerMemo: slot.invoice.payerMemo ?? "none",
+        payeeMemo: slot.invoice.payeeMemo ?? "none",
+      })
+    : undefined;
 
   const copyInvoice = async () => {
     if (!slot.invoice) return;
@@ -290,6 +298,7 @@ export function InvoiceCard({
   return (
     <article
       className="invoice-card"
+      data-payment-capability={paymentCapability?.id}
       aria-label={
         language === "ko"
           ? `${slot.slotNumber}번 결제, ${status.label}`
@@ -365,7 +374,7 @@ export function InvoiceCard({
               className={`verification-panel ${
                 slot.verificationDelayed
                   ? "delayed"
-                  : slot.invoice.verificationToken
+                  : paymentCapability?.automaticSettlement
                     ? "auto"
                     : "manual"
               }`}
@@ -376,7 +385,7 @@ export function InvoiceCard({
                   <strong>{c.autoVerifyDelayed}</strong>
                   <span>{c.autoVerifyDelayedHelp}</span>
                 </>
-              ) : slot.invoice.verificationToken ? (
+              ) : paymentCapability?.automaticSettlement ? (
                 <>
                   <strong>{c.autoVerifying}</strong>
                   <span>{c.autoVerifyingHelp}</span>
@@ -388,6 +397,26 @@ export function InvoiceCard({
                 </>
               )}
             </div>
+            {paymentCapability &&
+              (paymentCapability.payerMemo !== "none" ||
+                paymentCapability.payeeMemo !== "none") && (
+                <p className="capability-summary">
+                  {[
+                    paymentCapability.payerMemo === "full"
+                      ? c.payerMemoIncluded
+                      : paymentCapability.payerMemo === "partial"
+                        ? c.payerMemoPartial
+                        : undefined,
+                    paymentCapability.payeeMemo === "full"
+                      ? c.payeeMemoForwarded
+                      : paymentCapability.payeeMemo === "partial"
+                        ? c.payeeMemoPartial
+                        : undefined,
+                  ]
+                    .filter((label) => label !== undefined)
+                    .join(" · ")}
+                </p>
+              )}
             <div className="qr-shell">
               {renderQr ? (
                 <QrCode invoice={slot.invoice.bolt11} />

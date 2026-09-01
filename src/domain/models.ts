@@ -67,6 +67,8 @@ export interface IssuedInvoice {
   readonly expiresAt: string;
   readonly payeeNodeId: string;
   readonly featureBits: readonly number[];
+  readonly payerMemo: "none" | "partial" | "full";
+  readonly payeeMemo: "none" | "partial" | "full";
   readonly disposable?: boolean;
   readonly verifyUrl?: string;
   readonly provider: {

@@ -32,6 +32,8 @@ function pendingSlot(slotNumber: number, targetSats: string, attempt: number) {
       payeeNodeId: `02${byte.repeat(32)}`,
       featureBits: [],
       providerDomain: "wallet.example",
+      payerMemo: "none",
+      payeeMemo: "full",
     },
   } as const;
 }
@@ -93,6 +95,33 @@ describe("invoice API response correlation", () => {
 
     const result = await requestInvoiceBatch(request);
     expect(result.slots.map((slot) => slot.slotNumber)).toEqual([1, 2]);
+    expect(result.slots[0]).toMatchObject({
+      status: "pending",
+      invoice: { payerMemo: "none", payeeMemo: "full" },
+    });
+  });
+
+  it("rejects malformed memo capability evidence", async () => {
+    const slot = pendingSlot(1, "1000", 1);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response([
+          {
+            ...slot,
+            invoice: { ...slot.invoice, payerMemo: "guessed" },
+          },
+        ]),
+      ),
+    );
+
+    await expect(
+      requestInvoiceBatch({
+        requestId: "invalid-memo-capability",
+        address: request.address,
+        slots: [request.slots[0]!],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
   it.each([

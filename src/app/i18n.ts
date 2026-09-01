@@ -82,6 +82,10 @@ const KO = {
   manualRequired: "직접 확인 필요",
   manualRequiredHelp:
     "이 결제는 자동 확인을 사용할 수 없습니다. 받는 지갑에서 입금을 확인하십시오.",
+  payerMemoIncluded: "결제 요청에 메모 포함",
+  payerMemoPartial: "결제 요청에 메모 일부 포함",
+  payeeMemoForwarded: "받는 서비스에 메모 전달",
+  payeeMemoPartial: "받는 서비스에 메모 일부 전달",
   manualFinish: "직접 확인 후 완료로 표시",
   safeGenerating: "안전하게 결제 요청을 확인하고 있습니다.",
   safeSaving: "결제 요청을 기기에 안전하게 저장하고 있습니다.",
@@ -233,6 +237,10 @@ const EN: Record<keyof typeof KO, string> = {
   manualRequired: "Manual verification required",
   manualRequiredHelp:
     "Automatic verification is not available for this payment. Verify the deposit in the receiving wallet.",
+  payerMemoIncluded: "Memo included in payment request",
+  payerMemoPartial: "Memo partially included in payment request",
+  payeeMemoForwarded: "Memo sent to receiving service",
+  payeeMemoPartial: "Memo partially sent to receiving service",
   manualFinish: "Verify manually and mark complete",
   safeGenerating: "Securely checking the payment request.",
   safeSaving: "Securely saving the payment request on this device.",

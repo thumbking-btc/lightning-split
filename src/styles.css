@@ -683,6 +683,12 @@ button {
 .verification-panel span {
   font-size: 0.7rem;
 }
+.capability-summary {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
 .qr-shell {
   display: grid;
   place-items: center;

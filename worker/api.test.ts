@@ -209,6 +209,10 @@ describe("Lightning Split Worker API", () => {
       expect(slot.status).toBe("pending");
       expect(slot.invoice.bolt11).toMatch(/^lnbc/u);
       expect(slot.invoice.verificationToken).toMatch(/^v2\./u);
+      expect(slot.invoice).toMatchObject({
+        payerMemo: "none",
+        payeeMemo: "full",
+      });
       expect(slot.invoice).not.toHaveProperty("paymentRequest");
     }
   });

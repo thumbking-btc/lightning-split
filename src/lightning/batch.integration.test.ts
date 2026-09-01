@@ -321,6 +321,42 @@ describe("invoice batch generation", () => {
       expect(call[2]).toEqual({ comment: COMMENT });
     }
     expect(result.providerCommentStatus).toBe("forwarded");
+    expect(
+      result.slots.flatMap((slot) =>
+        slot.status === "pending"
+          ? [[slot.invoice.payerMemo, slot.invoice.payeeMemo] as const]
+          : [],
+      ),
+    ).toEqual([
+      ["none", "full"],
+      ["none", "full"],
+      ["none", "full"],
+    ]);
+  });
+
+  it("recognizes the full settlement memo in both payer and payee paths", async () => {
+    const commentDiscovery = { ...DISCOVERY, commentAllowed: 255 };
+    const mock = clientWith(
+      (_discovery, amountSats) => ({
+        invoice: createTestBolt11({
+          amountSats,
+          fixtureId: "both-memos",
+          timestamp: NOW_SECONDS,
+          description: COMMENT,
+        }).invoice,
+      }),
+      commentDiscovery,
+    );
+
+    const result = await generateInvoiceBatch(
+      { address: ADDRESS, slots: slots(1), providerComment: COMMENT },
+      { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+    );
+
+    expect(result.slots[0]).toMatchObject({
+      status: "pending",
+      invoice: { payerMemo: "full", payeeMemo: "full" },
+    });
   });
 
   it("omits an unsupported LUD-12 comment and reports it", async () => {
@@ -355,6 +391,10 @@ describe("invoice batch generation", () => {
       comment: "가나다라마",
     });
     expect(result.providerCommentStatus).toBe("partial");
+    expect(result.slots[0]).toMatchObject({
+      status: "pending",
+      invoice: { payerMemo: "none", payeeMemo: "partial" },
+    });
   });
 
   it("reports partial LUD-12 delivery across successful slots", async () => {

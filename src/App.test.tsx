@@ -308,6 +308,8 @@ describe("v1 mobile accessibility states", () => {
         payeeNodeId: `02${"11".repeat(32)}`,
         featureBits: [],
         providerDomain: "wallet.example",
+        payerMemo: "full",
+        payeeMemo: "full",
         verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
       },
     };
@@ -327,6 +329,12 @@ describe("v1 mobile accessibility states", () => {
     const pendingHtml = renderCard(pending);
     expect(pendingHtml).toContain("결제 대기 · 자동 확인 중");
     expect(pendingHtml).toContain("입금이 확인되면 자동으로 완료됩니다");
+    expect(pendingHtml).toContain(
+      'data-payment-capability="automatic-both-memos"',
+    );
+    expect(pendingHtml).toContain(
+      "결제 요청에 메모 포함 · 받는 서비스에 메모 전달",
+    );
     expect(pendingHtml).toContain("직접 확인 후 완료로 표시");
     expect(pendingHtml.indexOf("이 결제의 참여자")).toBeLessThan(
       pendingHtml.indexOf("qr-shell"),
@@ -345,6 +353,7 @@ describe("v1 mobile accessibility states", () => {
     const manualHtml = renderCard({ ...pending, invoice: manualInvoice });
     expect(manualHtml).toContain("결제 대기 · 직접 확인 필요");
     expect(manualHtml).toContain("자동 확인을 사용할 수 없습니다");
+    expect(manualHtml).toContain('data-payment-capability="both-memos"');
 
     const verifyingHtml = renderCard({
       ...pending,

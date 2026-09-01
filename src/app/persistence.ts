@@ -8,6 +8,7 @@ import {
   MAX_PEOPLE,
 } from "../domain/money";
 import { isRecord } from "../infrastructure/validation";
+import { isMemoDelivery } from "../lightning/settlement-capability";
 import { MAX_INVOICE_HISTORY, type SettlementSession } from "./types";
 
 const DATABASE_NAME = "lightning-split";
@@ -89,6 +90,8 @@ function isStoredInvoice(value: unknown): boolean {
       (bit) => Number.isSafeInteger(bit) && Number(bit) >= 0,
     ) &&
     typeof value.providerDomain === "string" &&
+    (value.payerMemo === undefined || isMemoDelivery(value.payerMemo)) &&
+    (value.payeeMemo === undefined || isMemoDelivery(value.payeeMemo)) &&
     (value.disposable === undefined || typeof value.disposable === "boolean") &&
     (value.verificationToken === undefined ||
       (typeof value.verificationToken === "string" &&

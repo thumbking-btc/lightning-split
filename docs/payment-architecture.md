@@ -1,6 +1,6 @@
 # 결제 구조 결정
 
-기준일은 2026-08-31입니다. 이 문서는 Lightning Split의 일반 공동비용 정산 경로와 자동 확인의 신뢰 경계를 정의합니다.
+기준일은 2026-09-01입니다. 이 문서는 Lightning Split의 일반 공동비용 정산 경로와 자동 확인의 신뢰 경계를 정의합니다.
 
 결제 확인 규격의 전체 등급과 적용 경계는 [자동 결제 확인 표준 조사](./payment-verification-standards.md)에 기록합니다.
 
@@ -11,8 +11,24 @@
 3. 참가자별 고정 금액 invoice callback을 최대 3개씩 병렬 호출합니다.
 4. 반환된 BOLT11의 network, signature, amount, expiry와 payment hash를 검증합니다.
 5. 참가자에게는 해당 BOLT11 하나만 QR로 표시합니다. QR 데이터는 BOLT11 권고에 따라 uppercase로 인코딩하고, 복사 문자열은 canonical lowercase를 유지합니다.
-6. callback이 실제 LUD-21 `verify` URL을 반환하면 그 invoice에 한해서 자동 확인합니다. `pr`와 payment preimage/payment-hash 일치를 모두 검증합니다.
-7. LUD-21이 없으면 자동 완료로 보고하지 않습니다. 정산자가 받는 지갑을 직접 확인한 뒤 수동 완료로 표시합니다.
+6. 최종 invoice에서 실제로 확인된 자동 확인·송신자 메모·수신자 메모 증거를 제품 capability registry에 넣어 여섯 단계 중 가장 높은 단계를 선택합니다.
+7. callback이 실제 LUD-21 `verify` URL을 반환하면 그 invoice에 한해서 자동 확인합니다. `pr`와 payment preimage/payment-hash 일치를 모두 검증합니다.
+8. LUD-21이 없으면 자동 완료로 보고하지 않습니다. 정산자가 받는 지갑을 직접 확인한 뒤 수동 완료로 표시합니다.
+
+## 제품 capability 체
+
+| 우선순위 | 필요한 기능                                 |
+| -------- | ------------------------------------------- |
+| 1        | QR + 자동 확인 + 송신자 메모 + 수신자 메모  |
+| 2        | QR + 자동 확인 + 송신자·수신자 중 한쪽 메모 |
+| 3        | QR + 자동 확인                              |
+| 4        | QR + 송신자 메모 + 수신자 메모              |
+| 5        | QR + 송신자·수신자 중 한쪽 메모             |
+| 6        | QR만 제공하고 수동 확인                     |
+
+송신자 메모와 수신자 메모 사이에는 별도 우선순위를 두지 않습니다. 자동 확인 여부를 가장 먼저 비교하고, 같은 자동 확인 수준 안에서 완전하게 전달된 메모 수만 비교합니다. `partial`은 사용자에게 사실대로 표시하고 저장하지만 완전한 메모로 세지 않습니다.
+
+이 체는 주소나 지갑 이름으로 경로를 정하지 않습니다. invoice 발급이 끝난 뒤 실제 응답과 검증된 BOLT11에 남은 증거만으로 단계가 결정됩니다. 현재 주소 발급 흐름의 자동 확인 adapter는 LUD-21 하나이며, 새로운 공개 규격을 추가할 때에는 같은 증거 형식으로 변환하는 독립 adapter를 추가합니다.
 
 ## 검토한 대안
 
@@ -37,7 +53,9 @@ NIP-57의 Zap request `p` 태그는 실제 Nostr 수취인 공개키입니다. L
 
 - 정산 메모는 provider가 `commentAllowed`를 제공할 때 LUD-12 comment로 callback에 전달합니다.
 - 이 경로는 주로 payee/provider 기록을 위한 best-effort 신호입니다.
+- 제품 capability 판정에서 수신자 메모 `full`은 LUD-12 comment 전체가 실제 callback 요청에 포함된 경우를 뜻합니다. provider나 받는 지갑의 거래내역 표시를 보증한다는 뜻은 아닙니다.
 - 최신 LUD-06은 callback invoice에서 요청 금액 일치를 검증하도록 요구하며 metadata hash를 강제하지 않습니다. 앱은 BOLT11 금액·서명·만료를 검증하되 유효한 inline `d`와 `h`를 모두 허용합니다.
+- 제품 capability 판정에서 송신자 메모 `full`은 요청한 전체 메모와 정확히 같은 inline `d`가 최종 BOLT11에 들어간 경우만 뜻합니다. `h`나 다른 설명을 보고 송신자 메모 지원을 추정하지 않습니다.
 - provider가 `h`를 사용하면 이는 원문이 아닌 hash입니다. 앱이 LNURL을 대신 수행한 뒤 raw BOLT11만 전달하므로 payer wallet은 원래 LNURL metadata의 사람이 읽는 설명을 복원할 수 없습니다.
 - payer 거래내역과 payee 거래내역의 표시 여부는 wallet/provider 구현마다 다르며 제품이 보장하지 않습니다.
 - 메모를 위해 추가 QR이나 결제 rail을 만들지 않습니다.

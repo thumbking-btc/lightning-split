@@ -17,6 +17,7 @@ import {
 } from "../api/serialization";
 import { isRecord } from "../infrastructure/validation";
 import { MAX_BOLT11_LENGTH } from "../lightning/bolt11";
+import { isMemoDelivery } from "../lightning/settlement-capability";
 
 export class ApiClientError extends Error {
   constructor(
@@ -101,6 +102,10 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
       (bit) => Number.isSafeInteger(bit) && Number(bit) >= 0,
     ) ||
     typeof value.invoice.providerDomain !== "string" ||
+    (value.invoice.payerMemo !== undefined &&
+      !isMemoDelivery(value.invoice.payerMemo)) ||
+    (value.invoice.payeeMemo !== undefined &&
+      !isMemoDelivery(value.invoice.payeeMemo)) ||
     (value.krwShare !== undefined &&
       (typeof value.krwShare !== "string" ||
         !/^[1-9]\d*$/u.test(value.krwShare)))
@@ -131,6 +136,12 @@ function assertPendingSlot(value: unknown): PendingInvoiceSlotDto {
       payeeNodeId: value.invoice.payeeNodeId,
       featureBits: value.invoice.featureBits,
       providerDomain: value.invoice.providerDomain,
+      ...(value.invoice.payerMemo === undefined
+        ? {}
+        : { payerMemo: value.invoice.payerMemo }),
+      ...(value.invoice.payeeMemo === undefined
+        ? {}
+        : { payeeMemo: value.invoice.payeeMemo }),
       ...(typeof value.invoice.disposable === "boolean"
         ? { disposable: value.invoice.disposable }
         : {}),

@@ -79,6 +79,8 @@ export interface PendingInvoiceSlotDto {
     readonly payeeNodeId: string;
     readonly featureBits: readonly number[];
     readonly providerDomain: string;
+    readonly payerMemo?: "none" | "partial" | "full";
+    readonly payeeMemo?: "none" | "partial" | "full";
     readonly disposable?: boolean;
     readonly verificationToken?: string;
   };

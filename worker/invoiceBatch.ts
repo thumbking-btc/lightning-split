@@ -73,6 +73,8 @@ export async function createInvoiceBatchResponse(
             payeeNodeId: slot.invoice.payeeNodeId,
             featureBits: slot.invoice.featureBits,
             providerDomain: slot.invoice.provider.domain,
+            payerMemo: slot.invoice.payerMemo,
+            payeeMemo: slot.invoice.payeeMemo,
             ...(slot.invoice.disposable === undefined
               ? {}
               : { disposable: slot.invoice.disposable }),
