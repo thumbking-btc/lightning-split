@@ -643,6 +643,7 @@ export function MarketSummary({
                 ? c.premiumUnavailable
                 : c.checking}
           </strong>
+          <small>{c.premiumRefresh}</small>
         </div>
       </div>
       <small>
@@ -666,7 +667,11 @@ export function SettlementHeader({
   const c = uiCopy(language);
   return (
     <header className="result-header">
-      <div className="brand-mark">ϟ</div>
+      <img
+        className="brand-mark"
+        src="/lightning-split.jpg"
+        alt="Lightning Split"
+      />
       <div>
         <span className="eyebrow">LIGHTNING SPLIT</span>
         <h1>{note || c.settlementInProgress}</h1>
@@ -931,10 +936,16 @@ export function App() {
   const [session, setSession] = useState<SettlementSession | null>(null);
   const krwMarketEnabled = inputMode === "krw" || session?.inputMode === "krw";
   const usdMarketEnabled = inputMode === "usd" || session?.inputMode === "usd";
-  const { market, refreshLockedSnapshot } =
-    useMarketInformation(krwMarketEnabled);
-  const { market: usdMarket, refreshLockedSnapshot: refreshLockedUsdSnapshot } =
-    useUsdMarketInformation(usdMarketEnabled);
+  const {
+    market,
+    prepareForActivation: prepareKrwMarket,
+    refreshLockedSnapshot,
+  } = useMarketInformation(krwMarketEnabled);
+  const {
+    market: usdMarket,
+    prepareForActivation: prepareUsdMarket,
+    refreshLockedSnapshot: refreshLockedUsdSnapshot,
+  } = useUsdMarketInformation(usdMarketEnabled);
   const [busy, setBusy] = useState(false);
   const [retryingSlot, setRetryingSlot] = useState<number>();
   const [error, setError] = useState<string>();
@@ -973,7 +984,19 @@ export function App() {
   };
 
   const changeInputMode = (next: InputMode) => {
-    if (next === inputMode) return;
+    if (next === inputMode) {
+      if (next === "krw") {
+        prepareKrwMarket();
+        void refreshLockedSnapshot().catch(() => undefined);
+      }
+      if (next === "usd") {
+        prepareUsdMarket();
+        void refreshLockedUsdSnapshot().catch(() => undefined);
+      }
+      return;
+    }
+    if (next === "krw") prepareKrwMarket();
+    if (next === "usd") prepareUsdMarket();
     setInputMode(next);
     saveCurrency(next);
     setTotalAmount("");
@@ -1712,7 +1735,11 @@ export function App() {
         language={language}
       />
       <header className="hero">
-        <div className="brand-mark large">ϟ</div>
+        <img
+          className="brand-mark large"
+          src="/lightning-split.jpg"
+          alt="Lightning Split"
+        />
         <span className="eyebrow">LIGHTNING SPLIT</span>
         <h1>
           {heroLine1For(inputMode, language)}

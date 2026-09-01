@@ -121,9 +121,39 @@ describe("v1 mobile accessibility states", () => {
     );
     expect(html).toContain("162,345,000원");
     expect(html).toContain("+1.82%");
+    expect(html).toContain("5분마다 갱신");
     expect(html).toContain("실시간");
     expect(html).not.toContain("upbit");
     expect(html).not.toContain("fallback");
+
+    const usdHtml = renderToStaticMarkup(
+      <MarketSummary
+        currency="usd"
+        market={{ connection: "loading" }}
+        usdMarket={{
+          connection: "live",
+          information: {
+            ok: true,
+            snapshot: {
+              priceUsdCents: "7871873",
+              source: "coinbase",
+              market: "BTC-USD",
+              observedAt: new Date().toISOString(),
+              retrievedAt: new Date().toISOString(),
+              snapshotAt: new Date().toISOString(),
+              fallbackUsed: false,
+            },
+            premium: {
+              basisPoints: "-2",
+              referencePriceUsdCents: "7873448",
+              retrievedAt: new Date().toISOString(),
+            },
+          },
+        }}
+      />,
+    );
+    expect(usdHtml).toContain("Coinbase Premium");
+    expect(usdHtml).toContain("5분마다 갱신");
   });
 
   it("explains a temporarily unavailable premium without implying a permanent absence", () => {

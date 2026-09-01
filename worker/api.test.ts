@@ -157,6 +157,21 @@ describe("Lightning Split Worker API", () => {
     });
   });
 
+  it("requires a same-origin WebSocket upgrade for the KRW live stream", async () => {
+    const response = await callWorker(apiRequest("/api/market/krw/stream"));
+    expect(response.status).toBe(426);
+
+    const crossOrigin = await callWorker(
+      new IncomingRequest(`${APP_ORIGIN}/api/market/krw/stream`, {
+        headers: {
+          Origin: "https://attacker.example",
+          Upgrade: "websocket",
+        },
+      }),
+    );
+    expect(crossOrigin.status).toBe(400);
+  });
+
   it("issues one raw BOLT11 payment path per slot with one discovery", async () => {
     const provider = mockInvoiceProvider({
       verifyUrl: "https://wallet.example/verify/batch",

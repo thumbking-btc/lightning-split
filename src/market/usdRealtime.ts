@@ -5,12 +5,10 @@ import type {
 
 export const USD_REALTIME_MARKET_POLICY = Object.freeze({
   websocketUrl: "wss://advanced-trade-ws.coinbase.com",
-  binanceWebsocketUrl: "wss://data-stream.binance.vision:443/ws/btcusdt@trade",
   productId: "BTC-USD",
   liveRenderIntervalMs: 1_000,
   reconnectDelaysMs: Object.freeze([15_000, 30_000, 60_000]),
-  liveRestRefreshMs: 60_000,
-  fallbackRestRefreshMs: 60_000,
+  restRefreshMs: 5 * 60_000,
   maximumLivePriceAgeMs: 2 * 60_000,
   maximumFutureClockSkewMs: 30_000,
 });
@@ -59,37 +57,6 @@ export function createCoinbaseHeartbeatSubscription(): string {
   });
 }
 
-export async function parseBinanceTradeMessage(
-  data: unknown,
-  nowMs = Date.now(),
-): Promise<LiveUsdMarketPrice | null> {
-  const text = await messageText(data);
-  if (text === null) return null;
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (
-    !isRecord(value) ||
-    value.e !== "trade" ||
-    value.s !== "BTCUSDT" ||
-    typeof value.E !== "number"
-  )
-    return null;
-  const ageMs = nowMs - value.E;
-  if (
-    ageMs > USD_REALTIME_MARKET_POLICY.maximumLivePriceAgeMs ||
-    ageMs < -USD_REALTIME_MARKET_POLICY.maximumFutureClockSkewMs
-  )
-    return null;
-  const priceUsdCents = decimalUsdToCents(value.p);
-  return priceUsdCents === null
-    ? null
-    : Object.freeze({ priceUsdCents, observedAtMs: value.E });
-}
-
 export async function parseCoinbaseTickerMessage(
   data: unknown,
   nowMs = Date.now(),
@@ -134,40 +101,6 @@ export async function parseCoinbaseTickerMessage(
   return null;
 }
 
-function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
-  return (numerator * 2n + denominator) / (denominator * 2n);
-}
-
-export function calculateCoinbasePremiumBasisPoints(
-  coinbasePriceUsdCents: bigint,
-  referencePriceUsdCents: bigint,
-): bigint {
-  if (coinbasePriceUsdCents <= 0n || referencePriceUsdCents <= 0n)
-    throw new RangeError("Market prices must be positive.");
-  return (
-    roundHalfUp(coinbasePriceUsdCents * 10_000n, referencePriceUsdCents) -
-    10_000n
-  );
-}
-
-export function withLiveUsdPremiumReference(
-  information: UsdPriceResponseDto,
-  reference: LiveUsdMarketPrice,
-  retrievedAtMs = Date.now(),
-): UsdPriceResponseDto {
-  return Object.freeze({
-    ...information,
-    premium: {
-      basisPoints: calculateCoinbasePremiumBasisPoints(
-        BigInt(information.snapshot.priceUsdCents),
-        reference.priceUsdCents,
-      ).toString(),
-      referencePriceUsdCents: reference.priceUsdCents.toString(),
-      retrievedAt: new Date(retrievedAtMs).toISOString(),
-    },
-  });
-}
-
 export function withLiveUsdMarketPrice(
   information: UsdPriceResponseDto,
   price: LiveUsdMarketPrice,
@@ -188,17 +121,7 @@ export function withLiveUsdMarketPrice(
   return Object.freeze({
     ok: true,
     snapshot,
-    ...(information.premium
-      ? {
-          premium: {
-            ...information.premium,
-            basisPoints: calculateCoinbasePremiumBasisPoints(
-              price.priceUsdCents,
-              BigInt(information.premium.referencePriceUsdCents),
-            ).toString(),
-          },
-        }
-      : {}),
+    ...(information.premium ? { premium: information.premium } : {}),
   });
 }
 
@@ -211,12 +134,8 @@ export function getUsdMarketReconnectDelay(attempt: number): number {
   return delays[index]!;
 }
 
-export function getUsdMarketRestRefreshInterval(
-  livePriceActive: boolean,
-): number {
-  return livePriceActive
-    ? USD_REALTIME_MARKET_POLICY.liveRestRefreshMs
-    : USD_REALTIME_MARKET_POLICY.fallbackRestRefreshMs;
+export function getUsdMarketRestRefreshInterval(): number {
+  return USD_REALTIME_MARKET_POLICY.restRefreshMs;
 }
 
 export function getUsdMarketRestRefreshDelay(

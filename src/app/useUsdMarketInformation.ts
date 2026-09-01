@@ -11,11 +11,9 @@ import {
   getUsdMarketReconnectDelay,
   getUsdMarketRestRefreshDelay,
   getUsdMarketRestRefreshInterval,
-  parseBinanceTradeMessage,
   parseCoinbaseTickerMessage,
   USD_REALTIME_MARKET_POLICY,
   withLiveUsdMarketPrice,
-  withLiveUsdPremiumReference,
   type LiveUsdMarketPrice,
 } from "../market/usdRealtime";
 import { ApiClientError } from "./api";
@@ -169,15 +167,14 @@ function mergeRestInformation(
 
 export function useUsdMarketInformation(enabled = true): {
   readonly market: UsdMarketInformationState;
+  readonly prepareForActivation: () => void;
   readonly refreshLockedSnapshot: () => Promise<UsdPriceResponseDto>;
 } {
   const [market, setMarket] = useState<UsdMarketInformationState>({
     connection: "connecting",
   });
   const informationRef = useRef<UsdPriceResponseDto | undefined>(undefined);
-  const premiumReferenceRef = useRef<LiveUsdMarketPrice | undefined>(undefined);
   const livePriceActiveRef = useRef(false);
-  const [livePriceActive, setLivePriceActive] = useState(false);
   const lastRestRequestAtRef = useRef(0);
   const requestInFlightRef = useRef<Promise<UsdPriceResponseDto> | null>(null);
 
@@ -225,6 +222,14 @@ export function useUsdMarketInformation(enabled = true): {
     }
   }, [setInformation]);
 
+  const prepareForActivation = useCallback(() => {
+    lastRestRequestAtRef.current = 0;
+    setMarket((current) => ({
+      ...(current.information ? { information: current.information } : {}),
+      connection: "connecting",
+    }));
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
     // Re-selecting a currency is a new active viewing session. Do not inherit
@@ -236,14 +241,16 @@ export function useUsdMarketInformation(enabled = true): {
     if (!enabled) return undefined;
     let disposed = false;
     let timer: number | undefined;
+    const browserCanRefresh = () =>
+      document.visibilityState === "visible" && navigator.onLine !== false;
     const clearTimer = () => {
       if (timer !== undefined) window.clearTimeout(timer);
       timer = undefined;
     };
     const schedule = () => {
       clearTimer();
-      if (disposed || document.visibilityState !== "visible") return;
-      const interval = getUsdMarketRestRefreshInterval(livePriceActive);
+      if (disposed || !browserCanRefresh()) return;
+      const interval = getUsdMarketRestRefreshInterval();
       const delay = getUsdMarketRestRefreshDelay(
         lastRestRequestAtRef.current,
         interval,
@@ -252,8 +259,8 @@ export function useUsdMarketInformation(enabled = true): {
     };
     const runWhenDue = async () => {
       clearTimer();
-      if (disposed || document.visibilityState !== "visible") return;
-      const interval = getUsdMarketRestRefreshInterval(livePriceActive);
+      if (disposed || !browserCanRefresh()) return;
+      const interval = getUsdMarketRestRefreshInterval();
       const delay = getUsdMarketRestRefreshDelay(
         lastRestRequestAtRef.current,
         interval,
@@ -265,18 +272,30 @@ export function useUsdMarketInformation(enabled = true): {
       await refresh().catch(() => undefined);
       if (!disposed) schedule();
     };
+    const refreshImmediately = async () => {
+      clearTimer();
+      if (disposed || !browserCanRefresh()) return;
+      await refresh().catch(() => undefined);
+      if (!disposed) schedule();
+    };
     const handleVisibilityChange = () => {
       clearTimer();
-      if (document.visibilityState === "visible") void runWhenDue();
+      if (document.visibilityState === "visible") void refreshImmediately();
     };
+    const handleOnline = () => void refreshImmediately();
+    const handleOffline = () => clearTimer();
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    if (document.visibilityState === "visible") void runWhenDue();
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    if (browserCanRefresh()) void refreshImmediately();
     return () => {
       disposed = true;
       clearTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
-  }, [enabled, livePriceActive, refresh]);
+  }, [enabled, refresh]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -294,7 +313,6 @@ export function useUsdMarketInformation(enabled = true): {
       document.visibilityState === "visible" && navigator.onLine !== false;
     const setStreamActive = (active: boolean) => {
       livePriceActiveRef.current = active;
-      setLivePriceActive(active);
       if (!active && informationRef.current)
         setMarket((current) => ({ ...current, connection: "recent" }));
     };
@@ -353,9 +371,7 @@ export function useUsdMarketInformation(enabled = true): {
       if (!price || disposed || !browserIsActive()) return;
       const current = informationRef.current;
       if (!current) return;
-      let next = withLiveUsdMarketPrice(current, price);
-      if (premiumReferenceRef.current)
-        next = withLiveUsdPremiumReference(next, premiumReferenceRef.current);
+      const next = withLiveUsdMarketPrice(current, price);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;
       reconnectAttempt = 0;
@@ -428,81 +444,5 @@ export function useUsdMarketInformation(enabled = true): {
     };
   }, [enabled, setInformation]);
 
-  useEffect(() => {
-    if (!enabled) return undefined;
-    let disposed = false;
-    let socket: WebSocket | undefined;
-    let reconnectTimer: number | undefined;
-    let reconnectAttempt = 0;
-
-    const browserIsActive = () =>
-      document.visibilityState === "visible" && navigator.onLine !== false;
-    const scheduleReconnect = () => {
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-      if (disposed || !browserIsActive()) return;
-      const delay = getUsdMarketReconnectDelay(reconnectAttempt);
-      reconnectAttempt += 1;
-      reconnectTimer = window.setTimeout(connect, delay);
-    };
-    const disconnect = () => {
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-      reconnectTimer = undefined;
-      reconnectAttempt = 0;
-      const activeSocket = socket;
-      socket = undefined;
-      activeSocket?.close();
-    };
-    const connect = () => {
-      if (disposed || !browserIsActive() || socket) return;
-      try {
-        const nextSocket = new WebSocket(
-          USD_REALTIME_MARKET_POLICY.binanceWebsocketUrl,
-        );
-        socket = nextSocket;
-        nextSocket.onmessage = (event) => {
-          void parseBinanceTradeMessage(event.data).then((reference) => {
-            if (!reference || disposed || socket !== nextSocket) return;
-            premiumReferenceRef.current = reference;
-            reconnectAttempt = 0;
-            const current = informationRef.current;
-            if (!current || current.snapshot.source !== "coinbase") return;
-            setInformation(
-              withLiveUsdPremiumReference(current, reference),
-              livePriceActiveRef.current ? "live" : "recent",
-            );
-          });
-        };
-        nextSocket.onerror = () => {
-          if (socket === nextSocket) nextSocket.close();
-        };
-        nextSocket.onclose = () => {
-          if (socket !== nextSocket) return;
-          socket = undefined;
-          scheduleReconnect();
-        };
-      } catch {
-        scheduleReconnect();
-      }
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "visible") disconnect();
-      else connect();
-    };
-    const handleOnline = () => connect();
-    const handleOffline = () => disconnect();
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    if (browserIsActive()) connect();
-    return () => {
-      disposed = true;
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-      disconnect();
-    };
-  }, [enabled, setInformation]);
-
-  return { market, refreshLockedSnapshot: refresh };
+  return { market, prepareForActivation, refreshLockedSnapshot: refresh };
 }

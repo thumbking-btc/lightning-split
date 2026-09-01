@@ -1,6 +1,8 @@
 # 결제 구조 결정
 
-기준일은 2026-08-30입니다. 이 문서는 Lightning Split의 일반 공동비용 정산 경로와 자동 확인의 신뢰 경계를 정의합니다.
+기준일은 2026-08-31입니다. 이 문서는 Lightning Split의 일반 공동비용 정산 경로와 자동 확인의 신뢰 경계를 정의합니다.
+
+결제 확인 규격의 전체 등급과 적용 경계는 [자동 결제 확인 표준 조사](./payment-verification-standards.md)에 기록합니다.
 
 ## 최종 구조
 
@@ -14,16 +16,16 @@
 
 ## 검토한 대안
 
-| 구조                                    | wallet·QR                                         | payer/payee UX                                                                  | 자동 확인·메모                                                                                     | 보안·종속성·복잡도                                                                                    | 결론                  |
-| --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------- |
-| 앱이 선발급한 raw BOLT11                | 일반 invoice 지원 wallet, 고정 금액 QR 1개        | payer는 스캔 후 결제, payee는 주소만 입력                                       | provider가 LUD-21을 줄 때만 자동 확인, comment와 invoice 설명 표시는 provider/wallet별 best-effort | 앱이 invoice를 검증하며 provider callback에 의존하지만 payer 권한은 받지 않음, 가장 단순              | 채택                  |
-| payer가 recipient LNURL-pay를 직접 수행 | LNURL-pay wallet, QR 1개                          | payer wallet이 금액·metadata 흐름을 맡지만 앱이 정한 고정 금액 이탈 가능성 있음 | payer 설명 전달은 유리하나 앱은 발급 invoice와 settlement를 안정적으로 연결할 수 없음              | provider 직접 통신으로 앱 책임은 작지만 wallet capability에 의존                                      | 미채택                |
-| Lightning Split LNURL proxy             | LNURL-pay wallet, QR 1개                          | 중간 callback이 추가되어 실패·재사용 상태가 늘어남                              | metadata 제어는 가능하나 payee 메모·settlement 증명을 새로 만들지는 못함                           | 공개 callback, 상태 수명, SSRF·재사용 방어가 추가되고 일반 wallet 호환 이득은 불확실                  | 제거                  |
-| BIP-321 wrapper                         | BIP-321 `lightning` parameter parser 필요, QR 1개 | 지원 wallet에서는 payer 문맥을 더 줄 수 있으나 raw invoice보다 parser 요구가 큼 | `message`는 payer URI 문맥이며 payee 메모나 범용 settlement proof가 아님                           | wrapper 파싱 호환성에 의존하고 invoice 자체 보안은 달라지지 않음                                      | 기본 경로에서 제거    |
-| BOLT12 Offer                            | BOLT12 지원 payer/payee 필요, QR 1개 가능         | 반복 수취에는 좋지만 주소만 입력하는 현재 payee 흐름으로 생성 불가              | Offer/Invoice 경로의 기능은 있으나 기존 Lightning Address provider 관측과 별개                     | 양쪽 capability와 별도 키·프로토콜 처리가 필요                                                        | 미채택                |
-| receiver wallet LUD-21                  | payer QR에는 변화 없음                            | 지원 provider에서는 payee가 별도 확인할 필요가 줄어듦                           | matching invoice·preimage가 있을 때 provider settlement attestation 가능                           | provider 독립 증명이 아니며 callback이 실제 `verify`를 반환한 invoice에만 사용, 보조 기능으로 단순    | 조건부 채택           |
-| receiver wallet NWC                     | payer QR은 BOLT11 1개 유지 가능                   | payee가 먼저 wallet 연결·권한을 승인해야 함                                     | `make_invoice`/`lookup_invoice`와 wallet 측 metadata 자동화 가능                                   | relay, 연결 secret, 최소 권한·취소·보관 설계가 필요하고 특정 wallet capability에 의존                 | 향후 명시적 고급 기능 |
-| NIP-57 Zap                              | Zap 지원 wallet/relay 의미가 추가됨               | 일반 공동비용이 Zap으로 표시되어 payer 의미가 왜곡됨                            | receipt가 있어도 provider 독립 payment proof가 아니며 일반 결제 메모 대체가 아님                   | 실제 Nostr 수취인 `p`가 필요하고 ephemeral alias는 부적합, relay·서명·provider capability 의존성이 큼 | 제거                  |
+| 구조                                    | wallet·QR                                  | payer/payee UX                                                                  | 자동 확인·메모                                                                                       | 보안·종속성·복잡도                                                                                    | 결론                  |
+| --------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------- |
+| 앱이 선발급한 raw BOLT11                | 일반 invoice 지원 wallet, 고정 금액 QR 1개 | payer는 스캔 후 결제, payee는 주소만 입력                                       | provider가 LUD-21을 줄 때만 자동 확인, comment와 invoice 설명 표시는 provider/wallet별 best-effort   | 앱이 invoice를 검증하며 provider callback에 의존하지만 payer 권한은 받지 않음, 가장 단순              | 채택                  |
+| payer가 recipient LNURL-pay를 직접 수행 | LNURL-pay wallet, QR 1개                   | payer wallet이 금액·metadata 흐름을 맡지만 앱이 정한 고정 금액 이탈 가능성 있음 | payer 설명 전달은 유리하나 앱은 발급 invoice와 settlement를 안정적으로 연결할 수 없음                | provider 직접 통신으로 앱 책임은 작지만 wallet capability에 의존                                      | 미채택                |
+| Lightning Split LNURL proxy             | LNURL-pay wallet, QR 1개                   | 중간 callback이 추가되어 실패·재사용 상태가 늘어남                              | metadata 제어는 가능하나 payee 메모·settlement 증명을 새로 만들지는 못함                             | 공개 callback, 상태 수명, SSRF·재사용 방어가 추가되고 일반 wallet 호환 이득은 불확실                  | 제거                  |
+| BIP-321 wrapper + `pop`                 | BIP-321 parser·PoP 지원 wallet, QR 1개     | 동일 기기의 로컬 호출 앱으로 BOLT11 preimage를 돌려줄 수 있음                   | `req-pop`은 강한 payment proof와 실패 폐쇄를 제공하지만 다른 기기에서 QR을 보여 주는 PWA로 복귀 불가 | HTTP(S)·브라우저 callback이 금지되고 설치형 URI handler와 wallet 지원이 필요                          | 현재 흐름에서 제거    |
+| BOLT12 Offer                            | BOLT12 지원 payer/payee 필요, QR 1개 가능  | 반복 수취에는 좋지만 주소만 입력하는 현재 payee 흐름으로 생성 불가              | Offer/Invoice 경로의 기능은 있으나 기존 Lightning Address provider 관측과 별개                       | 양쪽 capability와 별도 키·프로토콜 처리가 필요                                                        | 미채택                |
+| receiver wallet LUD-21                  | payer QR에는 변화 없음                     | 지원 provider에서는 payee가 별도 확인할 필요가 줄어듦                           | matching invoice·preimage가 있을 때 provider settlement attestation 가능                             | provider 독립 증명이 아니며 callback이 실제 `verify`를 반환한 invoice에만 사용, 보조 기능으로 단순    | 조건부 채택           |
+| receiver wallet NWC                     | payer QR은 BOLT11 1개 유지 가능            | payee가 먼저 wallet 연결·권한을 승인해야 함                                     | `make_invoice`/`lookup_invoice`, NWC-02 `payment_received`로 자동 확인 가능                          | relay, 연결 secret, 최소 권한·취소·보관 설계가 필요하고 특정 wallet capability에 의존                 | 향후 명시적 고급 기능 |
+| NIP-57 Zap                              | Zap 지원 wallet/relay 의미가 추가됨        | 일반 공동비용이 Zap으로 표시되어 payer 의미가 왜곡됨                            | receipt가 있어도 provider 독립 payment proof가 아니며 일반 결제 메모 대체가 아님                     | 실제 Nostr 수취인 `p`가 필요하고 ephemeral alias는 부적합, relay·서명·provider capability 의존성이 큼 | 제거                  |
 
 ## NIP-57 제거 결정
 
@@ -90,6 +92,7 @@ invoice 발급 API는 서버에 replay 상태를 저장하지 않는 stateless �
 - LUD-06/09/11/12/16/18/20/21: <https://github.com/lnurl/luds/tree/luds>
 - BIP-321: <https://github.com/bitcoin/bips/blob/master/bip-0321.mediawiki>
 - NIP-47/NWC: <https://github.com/nostr-protocol/nips/blob/master/47.md>
+- NWC-02 notifications: <https://github.com/nostr-wallet-connect/nwc/blob/main/02.md>
 - NIP-57: <https://github.com/nostr-protocol/nips/blob/master/57.md>
 
 ## 실결제가 필요한 검증

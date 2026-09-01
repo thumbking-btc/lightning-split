@@ -6,6 +6,7 @@ import {
   getMarketReconnectDelay,
   getMarketRestRefreshDelay,
   getMarketRestRefreshInterval,
+  getMarketWebSocketUrl,
   parseUpbitTradeMessage,
   REALTIME_MARKET_POLICY,
   withLiveMarketPrice,
@@ -81,6 +82,7 @@ export function completeMarketRefresh(
 
 export function useMarketInformation(enabled = true): {
   readonly market: MarketInformationState;
+  readonly prepareForActivation: () => void;
   readonly refreshLockedSnapshot: () => Promise<PriceResponseDto>;
 } {
   const [market, setMarket] = useState<MarketInformationState>({
@@ -88,7 +90,6 @@ export function useMarketInformation(enabled = true): {
   });
   const informationRef = useRef<PriceResponseDto | undefined>(undefined);
   const livePriceActiveRef = useRef(false);
-  const [livePriceActive, setLivePriceActive] = useState(false);
   const lastRestRequestAtRef = useRef(0);
 
   const setInformation = useCallback(
@@ -128,6 +129,14 @@ export function useMarketInformation(enabled = true): {
     return information;
   }, [refreshMarket]);
 
+  const prepareForActivation = useCallback(() => {
+    lastRestRequestAtRef.current = 0;
+    setMarket((current) => ({
+      ...(current.information ? { information: current.information } : {}),
+      connection: "loading",
+    }));
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
     // Re-selecting a currency is a new active viewing session. Do not inherit
@@ -139,6 +148,8 @@ export function useMarketInformation(enabled = true): {
     if (!enabled) return undefined;
     let disposed = false;
     let timer: number | undefined;
+    const browserCanRefresh = () =>
+      document.visibilityState === "visible" && navigator.onLine !== false;
     const clearTimer = () => {
       if (timer === undefined) return;
       window.clearTimeout(timer);
@@ -146,8 +157,8 @@ export function useMarketInformation(enabled = true): {
     };
     const schedule = () => {
       clearTimer();
-      if (disposed || document.visibilityState !== "visible") return;
-      const interval = getMarketRestRefreshInterval(livePriceActive);
+      if (disposed || !browserCanRefresh()) return;
+      const interval = getMarketRestRefreshInterval();
       const delay = getMarketRestRefreshDelay(
         lastRestRequestAtRef.current,
         interval,
@@ -156,8 +167,8 @@ export function useMarketInformation(enabled = true): {
     };
     const runWhenDue = async () => {
       clearTimer();
-      if (disposed || document.visibilityState !== "visible") return;
-      const interval = getMarketRestRefreshInterval(livePriceActive);
+      if (disposed || !browserCanRefresh()) return;
+      const interval = getMarketRestRefreshInterval();
       const delay = getMarketRestRefreshDelay(
         lastRestRequestAtRef.current,
         interval,
@@ -169,18 +180,30 @@ export function useMarketInformation(enabled = true): {
       await refreshMarket().catch(() => undefined);
       if (!disposed) schedule();
     };
+    const refreshImmediately = async () => {
+      clearTimer();
+      if (disposed || !browserCanRefresh()) return;
+      await refreshMarket().catch(() => undefined);
+      if (!disposed) schedule();
+    };
     const handleVisibilityChange = () => {
       clearTimer();
-      if (document.visibilityState === "visible") void runWhenDue();
+      if (document.visibilityState === "visible") void refreshImmediately();
     };
+    const handleOnline = () => void refreshImmediately();
+    const handleOffline = () => clearTimer();
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    if (document.visibilityState === "visible") void runWhenDue();
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    if (browserCanRefresh()) void refreshImmediately();
     return () => {
       disposed = true;
       clearTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
-  }, [enabled, livePriceActive, refreshMarket]);
+  }, [enabled, refreshMarket]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -198,7 +221,6 @@ export function useMarketInformation(enabled = true): {
       document.visibilityState === "visible" && navigator.onLine !== false;
     const setStreamActive = (active: boolean) => {
       livePriceActiveRef.current = active;
-      setLivePriceActive(active);
       if (!active && informationRef.current)
         setMarket((current) => ({ ...current, connection: "recent" }));
     };
@@ -282,7 +304,7 @@ export function useMarketInformation(enabled = true): {
       reconnectTimer = undefined;
       let nextSocket: WebSocket;
       try {
-        nextSocket = new WebSocket(REALTIME_MARKET_POLICY.websocketUrl);
+        nextSocket = new WebSocket(getMarketWebSocketUrl());
       } catch {
         setStreamActive(false);
         scheduleReconnect();
@@ -332,5 +354,5 @@ export function useMarketInformation(enabled = true): {
     };
   }, [enabled, setInformation]);
 
-  return { market, refreshLockedSnapshot };
+  return { market, prepareForActivation, refreshLockedSnapshot };
 }

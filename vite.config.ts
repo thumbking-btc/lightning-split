@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
@@ -38,12 +39,31 @@ function resolveGitBranch(): string {
   }
 }
 
+function resolveWorkingTreeRevision(): string | undefined {
+  try {
+    const diff = execFileSync(
+      "git",
+      ["diff", "--no-ext-diff", "--binary", "HEAD"],
+      {
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    return diff.length === 0
+      ? undefined
+      : createHash("sha256").update(diff).digest("hex").slice(0, 8);
+  } catch {
+    return undefined;
+  }
+}
+
 const gitCommit = resolveGitCommit();
 const gitBranch = resolveGitBranch();
+const workingTreeRevision = resolveWorkingTreeRevision();
 const previewBuild = !["main", "local", "unknown"].includes(gitBranch);
 const appVersion = `v${packageJson.version}${
   previewBuild ? `-preview.${gitCommit}` : ""
-}`;
+}${workingTreeRevision ? `.local.${workingTreeRevision}` : ""}`;
 
 function buildIdentityPlugin(): Plugin {
   return {

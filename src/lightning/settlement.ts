@@ -20,27 +20,6 @@ export type SettlementCheckResult =
       readonly providerStatus: string | null;
     };
 
-/**
- * The automatic-settlement method is selected from capabilities advertised for
- * the individual invoice. Provider names and domains are intentionally not part
- * of this input, so a wallet cannot require an allowlist entry to participate.
- */
-export type SettlementCapability =
-  | { readonly method: "lud21"; readonly verifyUrl: string }
-  | { readonly method: "manual" };
-
-export function selectSettlementCapability(
-  input: object,
-): SettlementCapability {
-  const verifyUrl =
-    "verifyUrl" in input && typeof input.verifyUrl === "string"
-      ? input.verifyUrl
-      : undefined;
-  return verifyUrl === undefined
-    ? Object.freeze({ method: "manual" })
-    : Object.freeze({ method: "lud21", verifyUrl });
-}
-
 export interface SettlementCheckInput {
   readonly verifyUrl?: string;
   readonly expectedPaymentHash: string;
