@@ -36,7 +36,7 @@ function information(
 }
 
 describe("market refresh reconciliation", () => {
-  it("returns and publishes the same live snapshot used for settlement locking", () => {
+  it("locks the live price with the latest REST premium snapshot", () => {
     const current = information(
       101_000_000n,
       "2030-01-01T00:00:03.000Z",
@@ -52,7 +52,7 @@ describe("market refresh reconciliation", () => {
     const locked = completeMarketRefresh(rest, current, true, setInformation);
 
     expect(locked.snapshot.priceKrw).toBe("101000000");
-    expect(locked.premium?.basisPoints).toBe("100");
+    expect(locked.premium?.basisPoints).toBe("0");
     expect(setInformation).toHaveBeenCalledWith(locked, "live");
   });
 

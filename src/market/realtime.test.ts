@@ -5,8 +5,10 @@ import { serializeBigIntDecimal } from "../api/serialization";
 import {
   calculatePremiumBasisPoints,
   createUpbitTradeSubscription,
+  getMarketReconnectDelay,
   getMarketRestRefreshDelay,
   getMarketRestRefreshInterval,
+  getMarketWebSocketUrl,
   parseUpbitTradeMessage,
   withLiveMarketPrice,
 } from "./realtime";
@@ -59,22 +61,33 @@ describe("real-time market information", () => {
     ).resolves.toBeNull();
   });
 
-  it("uses the P2P calculator refresh policy without treating 60 seconds as the live price interval", () => {
-    expect(getMarketRestRefreshInterval(true)).toBe(60_000);
-    expect(getMarketRestRefreshInterval(false)).toBe(16_000);
-    expect(getMarketRestRefreshDelay(1_000, 16_000, 5_000)).toBe(12_000);
-    expect(getMarketRestRefreshDelay(1_000, 16_000, 20_000)).toBe(0);
+  it("uses five-minute REST backup and 15-30-60 WebSocket reconnect backoff", () => {
+    expect(getMarketRestRefreshInterval()).toBe(300_000);
+    expect(getMarketRestRefreshDelay(1_000, 300_000, 5_000)).toBe(296_000);
+    expect(getMarketRestRefreshDelay(1_000, 300_000, 301_000)).toBe(0);
+    expect([0, 1, 2, 3, 20].map(getMarketReconnectDelay)).toEqual([
+      15_000, 30_000, 60_000, 60_000, 60_000,
+    ]);
   });
 
-  it("builds a realtime-only KRW-BTC trade subscription", () => {
+  it("requests an immediate snapshot followed by KRW-BTC realtime trades", () => {
     expect(JSON.parse(createUpbitTradeSubscription("ticket"))).toEqual([
       { ticket: "ticket" },
-      { type: "trade", codes: ["KRW-BTC"], is_only_realtime: true },
+      { type: "trade", codes: ["KRW-BTC"] },
       { format: "SIMPLE" },
     ]);
   });
 
-  it("recalculates display-only premium from the live domestic price", () => {
+  it("uses the same-origin Worker stream in local and HTTPS builds", () => {
+    expect(
+      getMarketWebSocketUrl({ protocol: "http:", host: "127.0.0.1:8792" }),
+    ).toBe("ws://127.0.0.1:8792/api/market/krw/stream");
+    expect(
+      getMarketWebSocketUrl({ protocol: "https:", host: "app.example" }),
+    ).toBe("wss://app.example/api/market/krw/stream");
+  });
+
+  it("keeps the REST premium snapshot while the domestic price updates live", () => {
     expect(calculatePremiumBasisPoints(101n, 100n)).toBe(100n);
     const information: PriceResponseDto = {
       ok: true,
@@ -103,6 +116,6 @@ describe("real-time market information", () => {
       source: "upbit",
       fallbackUsed: false,
     });
-    expect(live.premium?.basisPoints).toBe("100");
+    expect(live.premium?.basisPoints).toBe("0");
   });
 });

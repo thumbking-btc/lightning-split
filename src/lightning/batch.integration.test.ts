@@ -2,6 +2,7 @@ import { bech32 } from "@scure/base";
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
+import { InfrastructureError } from "../infrastructure/errors";
 import { createTestBolt11 } from "../test/bolt11-fixture";
 import { generateInvoiceBatch, type InvoiceSlotRequest } from "./batch";
 import type {
@@ -133,6 +134,36 @@ describe("invoice batch generation", () => {
     expect(result.completedCount).toBe(1);
     expect(events).toEqual(["discover", "starting", "callback:100"]);
   });
+
+  it.each([
+    "TIMEOUT",
+    "NETWORK_ERROR",
+    "HTTP_ERROR",
+    "RESPONSE_TOO_LARGE",
+    "INVALID_RESPONSE",
+  ] as const)(
+    "fails closed when a provider callback result is ambiguous: %s",
+    async (code) => {
+      const mock = clientWith(() =>
+        Promise.reject(
+          new InfrastructureError(code, "ambiguous callback", {
+            retryable: true,
+          }),
+        ),
+      );
+
+      const result = await generateInvoiceBatch(
+        { address: ADDRESS, slots: slots(1) },
+        { client: mock.client, now: () => NOW_SECONDS * 1_000 },
+      );
+
+      expect(result.slots[0]).toMatchObject({
+        status: "failed",
+        failure: { code: "ISSUANCE_UNKNOWN", retryable: false },
+      });
+      expect(mock.callback).toHaveBeenCalledOnce();
+    },
+  );
 
   it("discovers once, caps callbacks at three, and preserves request order", async () => {
     const inputSlots = slots(8);

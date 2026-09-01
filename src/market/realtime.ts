@@ -2,12 +2,11 @@ import type { PriceResponseDto } from "../api/contracts";
 import type { PriceSnapshotDto } from "../api/serialization";
 
 export const REALTIME_MARKET_POLICY = Object.freeze({
-  websocketUrl: "wss://api.upbit.com/websocket/v1",
+  websocketPath: "/api/market/krw/stream",
   market: "KRW-BTC",
   liveRenderIntervalMs: 1_000,
-  reconnectDelayMs: 12_000,
-  liveRestRefreshMs: 60_000,
-  fallbackRestRefreshMs: 16_000,
+  reconnectDelaysMs: Object.freeze([15_000, 30_000, 60_000]),
+  restRefreshMs: 5 * 60_000,
   maximumLivePriceAgeMs: 2 * 60_000,
   maximumFutureClockSkewMs: 30_000,
 });
@@ -68,16 +67,29 @@ export function createUpbitTradeSubscription(ticket: string): string {
     {
       type: "trade",
       codes: [REALTIME_MARKET_POLICY.market],
-      is_only_realtime: true,
     },
     { format: "SIMPLE" },
   ]);
 }
 
-export function getMarketRestRefreshInterval(livePriceActive: boolean): number {
-  return livePriceActive
-    ? REALTIME_MARKET_POLICY.liveRestRefreshMs
-    : REALTIME_MARKET_POLICY.fallbackRestRefreshMs;
+export function getMarketReconnectDelay(attempt: number): number {
+  const delays = REALTIME_MARKET_POLICY.reconnectDelaysMs;
+  const index = Math.min(
+    Math.max(Number.isFinite(attempt) ? Math.trunc(attempt) : 0, 0),
+    delays.length - 1,
+  );
+  return delays[index]!;
+}
+
+export function getMarketWebSocketUrl(
+  pageLocation: Pick<Location, "host" | "protocol"> = window.location,
+): string {
+  const protocol = pageLocation.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${pageLocation.host}${REALTIME_MARKET_POLICY.websocketPath}`;
+}
+
+export function getMarketRestRefreshInterval(): number {
+  return REALTIME_MARKET_POLICY.restRefreshMs;
 }
 
 export function getMarketRestRefreshDelay(
@@ -125,16 +137,6 @@ export function withLiveMarketPrice(
   return Object.freeze({
     ok: true,
     snapshot,
-    ...(information.premium
-      ? {
-          premium: {
-            ...information.premium,
-            basisPoints: calculatePremiumBasisPoints(
-              price.priceKrw,
-              BigInt(information.premium.referencePriceKrw),
-            ).toString(),
-          },
-        }
-      : {}),
+    ...(information.premium ? { premium: information.premium } : {}),
   });
 }

@@ -1,139 +1,232 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { PriceResponseDto } from "../api/contracts";
+import type {
+  UsdPriceResponseDto,
+  UsdPriceSnapshotDto,
+} from "../api/contracts";
+import { isRecord } from "../infrastructure/validation";
 import {
-  createUpbitTradeSubscription,
-  getMarketReconnectDelay,
-  getMarketRestRefreshDelay,
-  getMarketRestRefreshInterval,
-  getMarketWebSocketUrl,
-  parseUpbitTradeMessage,
-  REALTIME_MARKET_POLICY,
-  withLiveMarketPrice,
-  type LiveMarketPrice,
-} from "../market/realtime";
-import { fetchPriceInformation } from "./api";
-import { toUserMessage } from "./userMessage";
+  createCoinbaseHeartbeatSubscription,
+  createCoinbaseTickerSubscription,
+  getUsdMarketReconnectDelay,
+  getUsdMarketRestRefreshDelay,
+  getUsdMarketRestRefreshInterval,
+  parseCoinbaseTickerMessage,
+  USD_REALTIME_MARKET_POLICY,
+  withLiveUsdMarketPrice,
+  type LiveUsdMarketPrice,
+} from "../market/usdRealtime";
+import { ApiClientError } from "./api";
 
-export type MarketConnectionState =
-  "loading" | "live" | "recent" | "stale" | "unavailable";
+export type UsdMarketConnection =
+  "connecting" | "live" | "recent" | "stale" | "unavailable";
 
-export interface MarketInformationState {
-  readonly information?: PriceResponseDto;
-  readonly connection: MarketConnectionState;
+export interface UsdMarketInformationState {
+  readonly information?: UsdPriceResponseDto;
+  readonly connection: UsdMarketConnection;
   readonly error?: string;
 }
 
+function validTimestamp(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function parseUsdPriceSnapshot(value: unknown): UsdPriceSnapshotDto {
+  if (
+    !isRecord(value) ||
+    typeof value.priceUsdCents !== "string" ||
+    !/^[1-9]\d*$/u.test(value.priceUsdCents) ||
+    (value.source !== "coinbase" && value.source !== "kraken") ||
+    value.market !== "BTC-USD" ||
+    !validTimestamp(value.observedAt) ||
+    !validTimestamp(value.retrievedAt) ||
+    !validTimestamp(value.snapshotAt) ||
+    typeof value.fallbackUsed !== "boolean"
+  )
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "BTC/USD price response is invalid.",
+      false,
+    );
+  return {
+    priceUsdCents: value.priceUsdCents,
+    source: value.source,
+    market: "BTC-USD",
+    observedAt: value.observedAt,
+    retrievedAt: value.retrievedAt,
+    snapshotAt: value.snapshotAt,
+    fallbackUsed: value.fallbackUsed,
+  };
+}
+
+async function parseApiResponse(response: Response): Promise<unknown> {
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "BTC/USD price response could not be read.",
+      response.status >= 500,
+    );
+  }
+  if (!response.ok) {
+    if (isRecord(value) && value.ok === false && isRecord(value.error))
+      throw new ApiClientError(
+        typeof value.error.code === "string" ? value.error.code : "API_ERROR",
+        typeof value.error.message === "string"
+          ? value.error.message
+          : "BTC/USD price request failed.",
+        value.error.retryable === true,
+      );
+    throw new ApiClientError(
+      "API_ERROR",
+      "BTC/USD price request failed.",
+      response.status >= 500,
+    );
+  }
+  return value;
+}
+
+export async function fetchUsdPriceInformation(): Promise<UsdPriceResponseDto> {
+  const value = await parseApiResponse(
+    await fetch("/api/price/usd", { headers: { Accept: "application/json" } }),
+  );
+  if (!isRecord(value) || value.ok !== true)
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "BTC/USD price response is invalid.",
+      false,
+    );
+  const snapshot = parseUsdPriceSnapshot(value.snapshot);
+  const premium = value.premium;
+  if (
+    premium !== undefined &&
+    (!isRecord(premium) ||
+      typeof premium.basisPoints !== "string" ||
+      !/^-?\d+$/u.test(premium.basisPoints) ||
+      typeof premium.referencePriceUsdCents !== "string" ||
+      !/^[1-9]\d*$/u.test(premium.referencePriceUsdCents) ||
+      !validTimestamp(premium.retrievedAt))
+  )
+    throw new ApiClientError(
+      "INVALID_RESPONSE",
+      "BTC/USD premium response is invalid.",
+      false,
+    );
+  return {
+    ok: true,
+    snapshot,
+    ...(isRecord(premium)
+      ? {
+          premium: {
+            basisPoints: String(premium.basisPoints),
+            referencePriceUsdCents: String(premium.referencePriceUsdCents),
+            retrievedAt: String(premium.retrievedAt),
+          },
+        }
+      : {}),
+  };
+}
+
 function currentLivePrice(
-  information: PriceResponseDto,
-): LiveMarketPrice | null {
+  information: UsdPriceResponseDto,
+): LiveUsdMarketPrice | null {
   const observedAtMs = Date.parse(information.snapshot.observedAt);
   if (!Number.isFinite(observedAtMs)) return null;
   return {
-    priceKrw: BigInt(information.snapshot.priceKrw),
+    priceUsdCents: BigInt(information.snapshot.priceUsdCents),
     observedAtMs,
   };
 }
 
-export function mergeRestMarketInformation(
-  restInformation: PriceResponseDto,
-  current: PriceResponseDto | undefined,
+function mergeRestInformation(
+  rest: UsdPriceResponseDto,
+  current: UsdPriceResponseDto | undefined,
   livePriceActive: boolean,
-): PriceResponseDto {
-  if (!livePriceActive || !current) return restInformation;
-  const livePrice = currentLivePrice(current);
-  if (!livePrice) return restInformation;
-  const restObservedAtMs = Date.parse(restInformation.snapshot.observedAt);
+): UsdPriceResponseDto {
+  if (!livePriceActive || !current) return rest;
+  const live = currentLivePrice(current);
+  if (!live) return rest;
+  const restObservedAtMs = Date.parse(rest.snapshot.observedAt);
   if (
     Number.isFinite(restObservedAtMs) &&
-    restObservedAtMs >= livePrice.observedAtMs
-  ) {
-    return restInformation;
-  }
-
-  return withLiveMarketPrice(
+    restObservedAtMs >= live.observedAtMs
+  )
+    return rest;
+  return withLiveUsdMarketPrice(
     {
       ok: true,
       snapshot: current.snapshot,
-      ...(restInformation.premium ? { premium: restInformation.premium } : {}),
+      ...(rest.premium ? { premium: rest.premium } : {}),
     },
-    livePrice,
+    live,
     Date.parse(current.snapshot.retrievedAt),
   );
 }
 
-export function completeMarketRefresh(
-  restInformation: PriceResponseDto,
-  current: PriceResponseDto | undefined,
-  livePriceActive: boolean,
-  setInformation: (
-    information: PriceResponseDto,
-    connection: MarketConnectionState,
-  ) => void,
-): PriceResponseDto {
-  const next = mergeRestMarketInformation(
-    restInformation,
-    current,
-    livePriceActive,
-  );
-  setInformation(next, livePriceActive ? "live" : "recent");
-  return next;
-}
-
-export function useMarketInformation(enabled = true): {
-  readonly market: MarketInformationState;
+export function useUsdMarketInformation(enabled = true): {
+  readonly market: UsdMarketInformationState;
   readonly prepareForActivation: () => void;
-  readonly refreshLockedSnapshot: () => Promise<PriceResponseDto>;
+  readonly refreshLockedSnapshot: () => Promise<UsdPriceResponseDto>;
 } {
-  const [market, setMarket] = useState<MarketInformationState>({
-    connection: "loading",
+  const [market, setMarket] = useState<UsdMarketInformationState>({
+    connection: "connecting",
   });
-  const informationRef = useRef<PriceResponseDto | undefined>(undefined);
+  const informationRef = useRef<UsdPriceResponseDto | undefined>(undefined);
   const livePriceActiveRef = useRef(false);
   const lastRestRequestAtRef = useRef(0);
+  const requestInFlightRef = useRef<Promise<UsdPriceResponseDto> | null>(null);
 
   const setInformation = useCallback(
-    (information: PriceResponseDto, connection: MarketConnectionState) => {
+    (information: UsdPriceResponseDto, connection: UsdMarketConnection) => {
       informationRef.current = information;
       setMarket({ information, connection });
     },
     [],
   );
 
-  const refreshMarket = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<UsdPriceResponseDto> => {
+    if (requestInFlightRef.current) return requestInFlightRef.current;
+    const request = fetchUsdPriceInformation();
+    requestInFlightRef.current = request;
     try {
-      const information = await fetchPriceInformation();
-      return completeMarketRefresh(
-        information,
+      const rest = await request;
+      const information = mergeRestInformation(
+        rest,
         informationRef.current,
         livePriceActiveRef.current,
-        setInformation,
       );
+      setInformation(
+        information,
+        livePriceActiveRef.current ? "live" : "recent",
+      );
+      return information;
     } catch (cause) {
       if (!livePriceActiveRef.current) {
         const current = informationRef.current;
         setMarket({
           ...(current ? { information: current } : {}),
           connection: current ? "stale" : "unavailable",
-          error: toUserMessage(cause, "현재 시세를 확인하지 못했습니다."),
+          error:
+            cause instanceof Error
+              ? cause.message
+              : "BTC/USD price is temporarily unavailable.",
         });
       }
       throw cause;
     } finally {
       lastRestRequestAtRef.current = Date.now();
+      if (requestInFlightRef.current === request)
+        requestInFlightRef.current = null;
     }
   }, [setInformation]);
-
-  const refreshLockedSnapshot = useCallback(async () => {
-    const information = await refreshMarket();
-    return information;
-  }, [refreshMarket]);
 
   const prepareForActivation = useCallback(() => {
     lastRestRequestAtRef.current = 0;
     setMarket((current) => ({
       ...(current.information ? { information: current.information } : {}),
-      connection: "loading",
+      connection: "connecting",
     }));
   }, []);
 
@@ -151,15 +244,14 @@ export function useMarketInformation(enabled = true): {
     const browserCanRefresh = () =>
       document.visibilityState === "visible" && navigator.onLine !== false;
     const clearTimer = () => {
-      if (timer === undefined) return;
-      window.clearTimeout(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
       timer = undefined;
     };
     const schedule = () => {
       clearTimer();
       if (disposed || !browserCanRefresh()) return;
-      const interval = getMarketRestRefreshInterval();
-      const delay = getMarketRestRefreshDelay(
+      const interval = getUsdMarketRestRefreshInterval();
+      const delay = getUsdMarketRestRefreshDelay(
         lastRestRequestAtRef.current,
         interval,
       );
@@ -168,8 +260,8 @@ export function useMarketInformation(enabled = true): {
     const runWhenDue = async () => {
       clearTimer();
       if (disposed || !browserCanRefresh()) return;
-      const interval = getMarketRestRefreshInterval();
-      const delay = getMarketRestRefreshDelay(
+      const interval = getUsdMarketRestRefreshInterval();
+      const delay = getUsdMarketRestRefreshDelay(
         lastRestRequestAtRef.current,
         interval,
       );
@@ -177,13 +269,13 @@ export function useMarketInformation(enabled = true): {
         timer = window.setTimeout(() => void runWhenDue(), delay);
         return;
       }
-      await refreshMarket().catch(() => undefined);
+      await refresh().catch(() => undefined);
       if (!disposed) schedule();
     };
     const refreshImmediately = async () => {
       clearTimer();
       if (disposed || !browserCanRefresh()) return;
-      await refreshMarket().catch(() => undefined);
+      await refresh().catch(() => undefined);
       if (!disposed) schedule();
     };
     const handleVisibilityChange = () => {
@@ -203,7 +295,7 @@ export function useMarketInformation(enabled = true): {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
-  }, [enabled, refreshMarket]);
+  }, [enabled, refresh]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -215,7 +307,7 @@ export function useMarketInformation(enabled = true): {
     let staleTimer: number | undefined;
     let lastRenderedAt = 0;
     let lastLiveMessageAt = 0;
-    let queuedPrice: LiveMarketPrice | undefined;
+    let queuedPrice: LiveUsdMarketPrice | undefined;
 
     const browserIsActive = () =>
       document.visibilityState === "visible" && navigator.onLine !== false;
@@ -241,6 +333,13 @@ export function useMarketInformation(enabled = true): {
       socket = undefined;
       activeSocket?.close();
     };
+    const scheduleReconnect = () => {
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      if (disposed || !browserIsActive()) return;
+      const delay = getUsdMarketReconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(connect, delay);
+    };
     const checkStale = () => {
       staleTimer = undefined;
       if (
@@ -248,7 +347,7 @@ export function useMarketInformation(enabled = true): {
         !browserIsActive() ||
         !livePriceActiveRef.current ||
         Date.now() - lastLiveMessageAt <=
-          REALTIME_MARKET_POLICY.maximumLivePriceAgeMs
+          USD_REALTIME_MARKET_POLICY.maximumLivePriceAgeMs
       )
         return;
       const activeSocket = socket;
@@ -261,7 +360,7 @@ export function useMarketInformation(enabled = true): {
       if (staleTimer !== undefined) window.clearTimeout(staleTimer);
       staleTimer = window.setTimeout(
         checkStale,
-        REALTIME_MARKET_POLICY.maximumLivePriceAgeMs + 1,
+        USD_REALTIME_MARKET_POLICY.maximumLivePriceAgeMs + 1,
       );
     };
     const flushQueuedPrice = () => {
@@ -272,7 +371,7 @@ export function useMarketInformation(enabled = true): {
       if (!price || disposed || !browserIsActive()) return;
       const current = informationRef.current;
       if (!current) return;
-      const next = withLiveMarketPrice(current, price);
+      const next = withLiveUsdMarketPrice(current, price);
       lastRenderedAt = Date.now();
       lastLiveMessageAt = lastRenderedAt;
       reconnectAttempt = 0;
@@ -280,23 +379,16 @@ export function useMarketInformation(enabled = true): {
       setStreamActive(true);
       scheduleStaleCheck();
     };
-    const queuePrice = (price: LiveMarketPrice) => {
+    const queuePrice = (price: LiveUsdMarketPrice) => {
       if (!browserIsActive()) return;
       if (queuedPrice && queuedPrice.observedAtMs > price.observedAtMs) return;
       queuedPrice = price;
       const delay =
-        REALTIME_MARKET_POLICY.liveRenderIntervalMs -
+        USD_REALTIME_MARKET_POLICY.liveRenderIntervalMs -
         (Date.now() - lastRenderedAt);
       if (delay <= 0) flushQueuedPrice();
       else if (renderTimer === undefined)
         renderTimer = window.setTimeout(flushQueuedPrice, delay);
-    };
-    const scheduleReconnect = () => {
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-      if (disposed || !browserIsActive()) return;
-      const delay = getMarketReconnectDelay(reconnectAttempt);
-      reconnectAttempt += 1;
-      reconnectTimer = window.setTimeout(connect, delay);
     };
     const connect = () => {
       if (disposed || !browserIsActive() || socket) return;
@@ -304,22 +396,20 @@ export function useMarketInformation(enabled = true): {
       reconnectTimer = undefined;
       let nextSocket: WebSocket;
       try {
-        nextSocket = new WebSocket(getMarketWebSocketUrl());
+        nextSocket = new WebSocket(USD_REALTIME_MARKET_POLICY.websocketUrl);
       } catch {
         setStreamActive(false);
         scheduleReconnect();
         return;
       }
-      nextSocket.binaryType = "arraybuffer";
       socket = nextSocket;
       nextSocket.onopen = () => {
         if (disposed || socket !== nextSocket || !browserIsActive()) return;
-        nextSocket.send(
-          createUpbitTradeSubscription(`lightning-split-${Date.now()}`),
-        );
+        nextSocket.send(createCoinbaseTickerSubscription());
+        nextSocket.send(createCoinbaseHeartbeatSubscription());
       };
       nextSocket.onmessage = (event) => {
-        void parseUpbitTradeMessage(event.data).then((price) => {
+        void parseCoinbaseTickerMessage(event.data).then((price) => {
           if (!price || disposed || socket !== nextSocket) return;
           queuePrice(price);
         });
@@ -354,5 +444,5 @@ export function useMarketInformation(enabled = true): {
     };
   }, [enabled, setInformation]);
 
-  return { market, prepareForActivation, refreshLockedSnapshot };
+  return { market, prepareForActivation, refreshLockedSnapshot: refresh };
 }

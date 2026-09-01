@@ -4,6 +4,7 @@ import { parsePriceSnapshotDto } from "../api/serialization";
 import {
   createKrwSplitPlan,
   createSatsSplitPlan,
+  createUsdSplitPlan,
   MAX_PEOPLE,
 } from "../domain/money";
 import { isRecord } from "../infrastructure/validation";
@@ -54,6 +55,19 @@ function isCanonicalPositiveDecimal(value: unknown): value is string {
 
 function isIsoTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isStoredUsdPriceSnapshot(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isCanonicalPositiveDecimal(value.priceUsdCents) &&
+    (value.source === "coinbase" || value.source === "kraken") &&
+    value.market === "BTC-USD" &&
+    isIsoTimestamp(value.observedAt) &&
+    isIsoTimestamp(value.retrievedAt) &&
+    isIsoTimestamp(value.snapshotAt) &&
+    typeof value.fallbackUsed === "boolean"
+  );
 }
 
 function isStoredInvoice(value: unknown): boolean {
@@ -137,6 +151,8 @@ function isStoredSlot(value: unknown): boolean {
     !isCanonicalPositiveDecimal(value.targetSats) ||
     (value.krwShare !== undefined &&
       !isCanonicalPositiveDecimal(value.krwShare)) ||
+    (value.usdCentsShare !== undefined &&
+      !isCanonicalPositiveDecimal(value.usdCentsShare)) ||
     !Number.isSafeInteger(value.attempt) ||
     Number(value.attempt) < 1 ||
     (value.verificationDelayed !== undefined &&
@@ -265,6 +281,8 @@ function isStoredHistoricalInvoiceAttempt(value: unknown): boolean {
     !isCanonicalPositiveDecimal(value.targetSats) ||
     (value.krwShare !== undefined &&
       !isCanonicalPositiveDecimal(value.krwShare)) ||
+    (value.usdCentsShare !== undefined &&
+      !isCanonicalPositiveDecimal(value.usdCentsShare)) ||
     !Number.isSafeInteger(value.attempt) ||
     Number(value.attempt) < 1 ||
     !isStoredInvoice(value.invoice) ||
@@ -305,7 +323,9 @@ function isSettlementSession(value: unknown): value is SettlementSession {
     isRecord(value) &&
     value.version === 2 &&
     typeof value.id === "string" &&
-    (value.inputMode === "krw" || value.inputMode === "sats") &&
+    (value.inputMode === "krw" ||
+      value.inputMode === "usd" ||
+      value.inputMode === "sats") &&
     isCanonicalPositiveDecimal(value.totalAmount) &&
     Number.isSafeInteger(value.totalPeople) &&
     Number(value.totalPeople) >= 2 &&
@@ -320,6 +340,8 @@ function isSettlementSession(value: unknown): value is SettlementSession {
       typeof value.overallNote === "string") &&
     (value.payerShareKrw === undefined ||
       isCanonicalPositiveDecimal(value.payerShareKrw)) &&
+    (value.payerShareUsdCents === undefined ||
+      isCanonicalPositiveDecimal(value.payerShareUsdCents)) &&
     (value.payerShareSats === undefined ||
       isCanonicalPositiveDecimal(value.payerShareSats)) &&
     (value.providerCommentStatus === undefined ||
@@ -374,7 +396,8 @@ function assertSession(value: unknown): SettlementSession {
       return (
         !slot ||
         attempt.targetSats !== slot.targetSats ||
-        attempt.krwShare !== slot.krwShare
+        attempt.krwShare !== slot.krwShare ||
+        attempt.usdCentsShare !== slot.usdCentsShare
       );
     }) ||
     (value.issuedPaymentHashes !== undefined &&
@@ -392,11 +415,22 @@ function assertSession(value: unknown): SettlementSession {
       throw new Error("저장된 가격 snapshot이 올바르지 않습니다.");
     }
   }
+  if (
+    value.usdPriceSnapshot !== undefined &&
+    !isStoredUsdPriceSnapshot(value.usdPriceSnapshot)
+  ) {
+    throw new Error("저장된 USD 가격 snapshot이 올바르지 않습니다.");
+  }
   if (value.inputMode === "krw") {
     if (
       value.priceSnapshot === undefined ||
+      value.usdPriceSnapshot !== undefined ||
+      value.payerShareUsdCents !== undefined ||
       value.payerShareSats !== undefined ||
-      value.slots.some((slot) => slot.krwShare === undefined)
+      value.slots.some(
+        (slot) =>
+          slot.krwShare === undefined || slot.usdCentsShare !== undefined,
+      )
     ) {
       throw new Error("저장된 원화 정산 형식이 올바르지 않습니다.");
     }
@@ -417,11 +451,46 @@ function assertSession(value: unknown): SettlementSession {
     ) {
       throw new Error("저장된 원화 정산 합계가 올바르지 않습니다.");
     }
+  } else if (value.inputMode === "usd") {
+    if (
+      value.usdPriceSnapshot === undefined ||
+      value.priceSnapshot !== undefined ||
+      value.payerShareKrw !== undefined ||
+      value.payerShareSats !== undefined ||
+      value.slots.some(
+        (slot) =>
+          slot.usdCentsShare === undefined || slot.krwShare !== undefined,
+      )
+    ) {
+      throw new Error("저장된 달러 정산 형식이 올바르지 않습니다.");
+    }
+    const plan = createUsdSplitPlan(
+      BigInt(value.totalAmount),
+      value.totalPeople,
+      value.excludePayer,
+      BigInt(value.usdPriceSnapshot.priceUsdCents),
+    );
+    if (
+      value.invoiceCount !== plan.invoiceCount ||
+      value.payerShareUsdCents !== plan.payerShareUsdCents?.toString() ||
+      value.slots.some(
+        (slot, index) =>
+          slot.usdCentsShare !== plan.invoiceShares[index]?.toString() ||
+          slot.targetSats !== plan.targetSats[index]?.toString(),
+      )
+    ) {
+      throw new Error("저장된 달러 정산 합계가 올바르지 않습니다.");
+    }
   } else {
     if (
       value.priceSnapshot !== undefined ||
+      value.usdPriceSnapshot !== undefined ||
       value.payerShareKrw !== undefined ||
-      value.slots.some((slot) => slot.krwShare !== undefined)
+      value.payerShareUsdCents !== undefined ||
+      value.slots.some(
+        (slot) =>
+          slot.krwShare !== undefined || slot.usdCentsShare !== undefined,
+      )
     ) {
       throw new Error("저장된 sats 정산 형식이 올바르지 않습니다.");
     }

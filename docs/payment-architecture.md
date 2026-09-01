@@ -1,6 +1,8 @@
 # 결제 구조 결정
 
-기준일은 2026-08-30입니다. 이 문서는 Lightning Split의 일반 공동비용 정산 경로와 자동 확인의 신뢰 경계를 정의합니다.
+기준일은 2026-08-31입니다. 이 문서는 Lightning Split의 일반 공동비용 정산 경로와 자동 확인의 신뢰 경계를 정의합니다.
+
+결제 확인 규격의 전체 등급과 적용 경계는 [자동 결제 확인 표준 조사](./payment-verification-standards.md)에 기록합니다.
 
 ## 최종 구조
 
@@ -14,16 +16,16 @@
 
 ## 검토한 대안
 
-| 구조                                    | wallet·QR                                         | payer/payee UX                                                                  | 자동 확인·메모                                                                                     | 보안·종속성·복잡도                                                                                    | 결론                  |
-| --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------- |
-| 앱이 선발급한 raw BOLT11                | 일반 invoice 지원 wallet, 고정 금액 QR 1개        | payer는 스캔 후 결제, payee는 주소만 입력                                       | provider가 LUD-21을 줄 때만 자동 확인, comment와 invoice 설명 표시는 provider/wallet별 best-effort | 앱이 invoice를 검증하며 provider callback에 의존하지만 payer 권한은 받지 않음, 가장 단순              | 채택                  |
-| payer가 recipient LNURL-pay를 직접 수행 | LNURL-pay wallet, QR 1개                          | payer wallet이 금액·metadata 흐름을 맡지만 앱이 정한 고정 금액 이탈 가능성 있음 | payer 설명 전달은 유리하나 앱은 발급 invoice와 settlement를 안정적으로 연결할 수 없음              | provider 직접 통신으로 앱 책임은 작지만 wallet capability에 의존                                      | 미채택                |
-| Lightning Split LNURL proxy             | LNURL-pay wallet, QR 1개                          | 중간 callback이 추가되어 실패·재사용 상태가 늘어남                              | metadata 제어는 가능하나 payee 메모·settlement 증명을 새로 만들지는 못함                           | 공개 callback, 상태 수명, SSRF·재사용 방어가 추가되고 일반 wallet 호환 이득은 불확실                  | 제거                  |
-| BIP-321 wrapper                         | BIP-321 `lightning` parameter parser 필요, QR 1개 | 지원 wallet에서는 payer 문맥을 더 줄 수 있으나 raw invoice보다 parser 요구가 큼 | `message`는 payer URI 문맥이며 payee 메모나 범용 settlement proof가 아님                           | wrapper 파싱 호환성에 의존하고 invoice 자체 보안은 달라지지 않음                                      | 기본 경로에서 제거    |
-| BOLT12 Offer                            | BOLT12 지원 payer/payee 필요, QR 1개 가능         | 반복 수취에는 좋지만 주소만 입력하는 현재 payee 흐름으로 생성 불가              | Offer/Invoice 경로의 기능은 있으나 기존 Lightning Address provider 관측과 별개                     | 양쪽 capability와 별도 키·프로토콜 처리가 필요                                                        | 미채택                |
-| receiver wallet LUD-21                  | payer QR에는 변화 없음                            | 지원 provider에서는 payee가 별도 확인할 필요가 줄어듦                           | matching invoice·preimage가 있을 때 provider settlement attestation 가능                           | provider 독립 증명이 아니며 callback이 실제 `verify`를 반환한 invoice에만 사용, 보조 기능으로 단순    | 조건부 채택           |
-| receiver wallet NWC                     | payer QR은 BOLT11 1개 유지 가능                   | payee가 먼저 wallet 연결·권한을 승인해야 함                                     | `make_invoice`/`lookup_invoice`와 wallet 측 metadata 자동화 가능                                   | relay, 연결 secret, 최소 권한·취소·보관 설계가 필요하고 특정 wallet capability에 의존                 | 향후 명시적 고급 기능 |
-| NIP-57 Zap                              | Zap 지원 wallet/relay 의미가 추가됨               | 일반 공동비용이 Zap으로 표시되어 payer 의미가 왜곡됨                            | receipt가 있어도 provider 독립 payment proof가 아니며 일반 결제 메모 대체가 아님                   | 실제 Nostr 수취인 `p`가 필요하고 ephemeral alias는 부적합, relay·서명·provider capability 의존성이 큼 | 제거                  |
+| 구조                                    | wallet·QR                                  | payer/payee UX                                                                  | 자동 확인·메모                                                                                       | 보안·종속성·복잡도                                                                                    | 결론                  |
+| --------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------- |
+| 앱이 선발급한 raw BOLT11                | 일반 invoice 지원 wallet, 고정 금액 QR 1개 | payer는 스캔 후 결제, payee는 주소만 입력                                       | provider가 LUD-21을 줄 때만 자동 확인, comment와 invoice 설명 표시는 provider/wallet별 best-effort   | 앱이 invoice를 검증하며 provider callback에 의존하지만 payer 권한은 받지 않음, 가장 단순              | 채택                  |
+| payer가 recipient LNURL-pay를 직접 수행 | LNURL-pay wallet, QR 1개                   | payer wallet이 금액·metadata 흐름을 맡지만 앱이 정한 고정 금액 이탈 가능성 있음 | payer 설명 전달은 유리하나 앱은 발급 invoice와 settlement를 안정적으로 연결할 수 없음                | provider 직접 통신으로 앱 책임은 작지만 wallet capability에 의존                                      | 미채택                |
+| Lightning Split LNURL proxy             | LNURL-pay wallet, QR 1개                   | 중간 callback이 추가되어 실패·재사용 상태가 늘어남                              | metadata 제어는 가능하나 payee 메모·settlement 증명을 새로 만들지는 못함                             | 공개 callback, 상태 수명, SSRF·재사용 방어가 추가되고 일반 wallet 호환 이득은 불확실                  | 제거                  |
+| BIP-321 wrapper + `pop`                 | BIP-321 parser·PoP 지원 wallet, QR 1개     | 동일 기기의 로컬 호출 앱으로 BOLT11 preimage를 돌려줄 수 있음                   | `req-pop`은 강한 payment proof와 실패 폐쇄를 제공하지만 다른 기기에서 QR을 보여 주는 PWA로 복귀 불가 | HTTP(S)·브라우저 callback이 금지되고 설치형 URI handler와 wallet 지원이 필요                          | 현재 흐름에서 제거    |
+| BOLT12 Offer                            | BOLT12 지원 payer/payee 필요, QR 1개 가능  | 반복 수취에는 좋지만 주소만 입력하는 현재 payee 흐름으로 생성 불가              | Offer/Invoice 경로의 기능은 있으나 기존 Lightning Address provider 관측과 별개                       | 양쪽 capability와 별도 키·프로토콜 처리가 필요                                                        | 미채택                |
+| receiver wallet LUD-21                  | payer QR에는 변화 없음                     | 지원 provider에서는 payee가 별도 확인할 필요가 줄어듦                           | matching invoice·preimage가 있을 때 provider settlement attestation 가능                             | provider 독립 증명이 아니며 callback이 실제 `verify`를 반환한 invoice에만 사용, 보조 기능으로 단순    | 조건부 채택           |
+| receiver wallet NWC                     | payer QR은 BOLT11 1개 유지 가능            | payee가 먼저 wallet 연결·권한을 승인해야 함                                     | `make_invoice`/`lookup_invoice`, NWC-02 `payment_received`로 자동 확인 가능                          | relay, 연결 secret, 최소 권한·취소·보관 설계가 필요하고 특정 wallet capability에 의존                 | 향후 명시적 고급 기능 |
+| NIP-57 Zap                              | Zap 지원 wallet/relay 의미가 추가됨        | 일반 공동비용이 Zap으로 표시되어 payer 의미가 왜곡됨                            | receipt가 있어도 provider 독립 payment proof가 아니며 일반 결제 메모 대체가 아님                     | 실제 Nostr 수취인 `p`가 필요하고 ephemeral alias는 부적합, relay·서명·provider capability 의존성이 큼 | 제거                  |
 
 ## NIP-57 제거 결정
 
@@ -67,19 +69,21 @@ LUD-21은 recipient provider의 settlement attestation을 조회하는 경로입
 - invoice API: Cloudflare rate-limit binding 기준 IP별 30 batch/분
 - settlement API: IP별 300회/분
 - QR 생성: 현재 카드와 양옆 카드만 활성화
-- 허용 invoice 잔여 수명: 최대 24시간; replay 보관은 만료 후 확인 기간까지 포함한 8일
+- 허용 invoice 잔여 수명: 최대 24시간; 재발급 전후 invoice 이력은 브라우저에서 7일간 보관
 
 20명은 Lightning protocol 한계가 아니라 모바일 carousel 탐색, 최대 20개의 payable invoice 관리, callback 지연을 함께 고려한 제품 상한입니다. 상향하려면 목록 탐색/virtualization과 provider-domain별 quota를 먼저 재검증해야 합니다.
 
-## 중복 발급과 저장
+## 발급 실패와 저장 경계
 
-새 client는 초기 batch와 각 재발급에 안정적인 request ID를 보냅니다. `InvoiceBatchCoordinator` Durable Object는 같은 request ID와 입력에 동일 응답을 재생합니다. provider callback timeout도 실패 응답으로 보관하므로 client 재시도가 두 번째 callback을 자동 실행하지 않습니다. 같은 ID를 다른 입력에 재사용하면 거부합니다.
+invoice 발급 API는 서버에 replay 상태를 저장하지 않는 stateless 경로입니다. `requestId`는 이전 클라이언트와의 요청 형식 호환을 위해 남겨 두지만 Worker가 같은 ID의 과거 응답을 보관하거나 재생하지 않습니다.
 
-재생 결과는 8일 후 alarm으로 삭제됩니다. 여기에는 발급된 invoice와 provider domain이 포함되지만 정산 메모와 Lightning Address 입력 원문은 포함되지 않습니다. 활성 정산 UI 상태와 참여자 이름은 브라우저 IndexedDB에 저장합니다.
+브라우저가 `/api/invoices`의 응답을 받지 못한 네트워크 수준 실패는 발급 결과가 불명확하므로 자동 재전송하지 않습니다. 클라이언트는 이를 `ISSUANCE_UNKNOWN`으로 처리하고, 정산자가 받는 지갑의 상태를 확인한 뒤 새 정산을 시작하도록 안내합니다. 반대로 Worker가 provider discovery 또는 callback의 명시적 실패 응답을 정상적으로 돌려준 경우에는 해당 실패 원인과 retryable 여부를 화면에 반영합니다.
 
-IndexedDB v2는 revision compare-and-swap으로 저장과 삭제를 모두 보호합니다. 오래 열린 탭이 다른 탭의 최신 정산을 덮어쓰거나 삭제하려 하면 최신 상태를 다시 불러오며, 구 v1 완료 기록은 자동·수동 근거를 추측하지 않고 받는 지갑 재확인이 필요한 상태로 이관합니다. 재발급 전후 invoice의 자동·수동 완료 근거는 7일간 이력에 남겨 지연 결제가 겹치면 이중 입금 가능성을 경고합니다.
+정상적으로 받은 BOLT11은 즉시 QR로 노출하지 않습니다. 먼저 브라우저 IndexedDB에 저장할 때까지 `awaitingPersistence` 상태로 유지하고, 저장이 성공한 invoice만 결제 QR로 표시합니다. 저장에 실패하면 해당 invoice는 화면에 표시하지 않고 실패 상태로 전환합니다.
 
-외부 provider 자체가 idempotency를 제공하지 않으므로 Worker가 callback 응답을 받은 직후 응답 저장 전에 중단되는 극단적인 구간까지 exactly-once를 증명할 수는 없습니다. 저장된 fingerprint만 남은 재시도는 새 callback을 실행하지 않고 `ISSUANCE_UNKNOWN`으로 중단합니다.
+활성 정산 UI 상태, 참여자 이름, 발급된 invoice와 payment hash, 재발급 이력은 브라우저 IndexedDB에 저장합니다. IndexedDB v2는 revision compare-and-swap으로 저장과 삭제를 보호하며, 오래 열린 탭이 다른 탭의 최신 정산을 덮어쓰거나 삭제하려 하면 최신 상태를 다시 불러옵니다. 재발급 전후 invoice의 자동·수동 완료 근거는 7일간 이력에 남겨 지연 결제가 겹치면 이중 입금 가능성을 경고합니다.
+
+이 구조는 provider callback 자체의 exactly-once 발급을 보장하지 않습니다. 응답 유실이나 provider 내부 동작 때문에 화면에 노출되지 않은 미결제 invoice가 남을 수 있으므로, 자동 재전송보다 명시적인 실패 폐쇄를 선택합니다. Lightning Split은 해당 invoice를 자동 결제하지 않으며 사용자가 확인하지 못한 invoice를 QR로 노출하지 않습니다.
 
 ## 규격 근거
 
@@ -88,6 +92,7 @@ IndexedDB v2는 revision compare-and-swap으로 저장과 삭제를 모두 보�
 - LUD-06/09/11/12/16/18/20/21: <https://github.com/lnurl/luds/tree/luds>
 - BIP-321: <https://github.com/bitcoin/bips/blob/master/bip-0321.mediawiki>
 - NIP-47/NWC: <https://github.com/nostr-protocol/nips/blob/master/47.md>
+- NWC-02 notifications: <https://github.com/nostr-wallet-connect/nwc/blob/main/02.md>
 - NIP-57: <https://github.com/nostr-protocol/nips/blob/master/57.md>
 
 ## 실결제가 필요한 검증

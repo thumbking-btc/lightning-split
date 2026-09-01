@@ -1,4 +1,3 @@
-import { env } from "cloudflare:workers";
 import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,10 +9,12 @@ const APP_ORIGIN = "https://app.example";
 const DISCOVERY_URL = "https://wallet.example/.well-known/lnurlp/user";
 const CALLBACK_URL = "https://wallet.example/callback";
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
+const ALLOWING_RATE_LIMITER = {
+  limit: () => Promise.resolve({ success: true }),
+} as unknown as RateLimit;
 const TEST_ENV = {
-  INVOICE_RATE_LIMITER: env.INVOICE_RATE_LIMITER,
-  SETTLEMENT_RATE_LIMITER: env.SETTLEMENT_RATE_LIMITER,
-  INVOICE_BATCHES: env.INVOICE_BATCHES,
+  INVOICE_RATE_LIMITER: ALLOWING_RATE_LIMITER,
+  SETTLEMENT_RATE_LIMITER: ALLOWING_RATE_LIMITER,
   VERIFICATION_TOKEN_SECRET: "11".repeat(32),
 };
 
@@ -156,6 +157,21 @@ describe("Lightning Split Worker API", () => {
     });
   });
 
+  it("requires a same-origin WebSocket upgrade for the KRW live stream", async () => {
+    const response = await callWorker(apiRequest("/api/market/krw/stream"));
+    expect(response.status).toBe(426);
+
+    const crossOrigin = await callWorker(
+      new IncomingRequest(`${APP_ORIGIN}/api/market/krw/stream`, {
+        headers: {
+          Origin: "https://attacker.example",
+          Upgrade: "websocket",
+        },
+      }),
+    );
+    expect(crossOrigin.status).toBe(400);
+  });
+
   it("issues one raw BOLT11 payment path per slot with one discovery", async () => {
     const provider = mockInvoiceProvider({
       verifyUrl: "https://wallet.example/verify/batch",
@@ -187,17 +203,16 @@ describe("Lightning Split Worker API", () => {
     }
   });
 
-  it("replays an idempotent batch without issuing new provider invoices", async () => {
+  it("does not keep replay state between accepted invoice requests", async () => {
     const provider = mockInvoiceProvider();
-    const request = invoiceRequest("idempotent-replay");
+    const request = invoiceRequest("stateless-repeat");
     const first = await callWorker(apiRequest("/api/invoices", request));
-    const firstBody = await first.text();
     const second = await callWorker(apiRequest("/api/invoices", request));
 
+    expect(first.status).toBe(200);
     expect(second.status).toBe(200);
-    expect(await second.text()).toBe(firstBody);
-    expect(provider.discovery).toHaveBeenCalledOnce();
-    expect(provider.callback).toHaveBeenCalledTimes(2);
+    expect(provider.discovery).toHaveBeenCalledTimes(2);
+    expect(provider.callback).toHaveBeenCalledTimes(4);
   });
 
   it("allows a safe retry after discovery fails before any provider callback", async () => {
@@ -240,16 +255,19 @@ describe("Lightning Split Worker API", () => {
     });
   });
 
-  it("rejects reuse of an idempotency key with different input", async () => {
-    mockInvoiceProvider();
-    await callWorker(
-      apiRequest("/api/invoices", invoiceRequest("idempotency-conflict", 1)),
+  it("does not coordinate repeated request keys with different input", async () => {
+    const provider = mockInvoiceProvider();
+    const first = await callWorker(
+      apiRequest("/api/invoices", invoiceRequest("legacy-correlation-key", 1)),
     );
-    const conflict = await callWorker(
-      apiRequest("/api/invoices", invoiceRequest("idempotency-conflict", 2)),
+    const second = await callWorker(
+      apiRequest("/api/invoices", invoiceRequest("legacy-correlation-key", 2)),
     );
-    expect(conflict.status).toBe(400);
-    await expect(conflict.json()).resolves.toMatchObject({ ok: false });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(provider.discovery).toHaveBeenCalledTimes(2);
+    expect(provider.callback).toHaveBeenCalledTimes(3);
   });
 
   it("rejects a provider flow whose success action cannot be preserved", async () => {
