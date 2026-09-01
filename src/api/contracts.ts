@@ -6,6 +6,10 @@ import { isRecord } from "../infrastructure/validation";
 import type { InvoiceSlotRequest } from "../lightning/batch";
 import { MAX_BOLT11_LENGTH } from "../lightning/bolt11";
 
+export const INVOICE_CLIENT_PROTOCOL_HEADER =
+  "X-Lightning-Split-Invoice-Protocol";
+export const INVOICE_CLIENT_PROTOCOL_VERSION = "1";
+
 export interface ApiErrorDto {
   readonly ok: false;
   readonly error: {

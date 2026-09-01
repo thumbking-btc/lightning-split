@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { BatchInvoiceRequestDto } from "../api/contracts";
+import {
+  INVOICE_CLIENT_PROTOCOL_HEADER,
+  INVOICE_CLIENT_PROTOCOL_VERSION,
+  type BatchInvoiceRequestDto,
+} from "../api/contracts";
 import { ApiClientError, fetchSettlement, requestInvoiceBatch } from "./api";
 
 const request: BatchInvoiceRequestDto = {
@@ -61,6 +65,24 @@ function response(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("invoice API response correlation", () => {
+  it("identifies the compatible stateless issuance protocol", async () => {
+    const fetcher = vi.fn(async () =>
+      response([pendingSlot(1, "1000", 1), pendingSlot(2, "1001", 2)]),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    await requestInvoiceBatch(request);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/invoices",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          [INVOICE_CLIENT_PROTOCOL_HEADER]: INVOICE_CLIENT_PROTOCOL_VERSION,
+        }),
+      }),
+    );
+  });
+
   it("correlates reordered slots", async () => {
     vi.stubGlobal(
       "fetch",

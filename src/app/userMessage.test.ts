@@ -4,6 +4,17 @@ import { ApiClientError } from "./api";
 import { toUserMessage } from "./userMessage";
 
 describe("user-facing API errors", () => {
+  it("directs an incompatible client to the update button", () => {
+    const error = new ApiClientError(
+      "CLIENT_UPGRADE_REQUIRED",
+      "technical detail",
+      false,
+    );
+
+    expect(toUserMessage(error)).toContain("업데이트 버튼");
+    expect(toUserMessage(error, undefined, "en")).toContain("update button");
+  });
+
   it("explains rate limits in Korean with the retry window", () => {
     expect(
       toUserMessage(

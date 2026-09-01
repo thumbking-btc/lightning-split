@@ -8,6 +8,10 @@ import type {
   SettlementResponseDto,
 } from "../api/contracts";
 import {
+  INVOICE_CLIENT_PROTOCOL_HEADER,
+  INVOICE_CLIENT_PROTOCOL_VERSION,
+} from "../api/contracts";
+import {
   parsePriceSnapshotDto,
   serializePriceSnapshot,
 } from "../api/serialization";
@@ -231,6 +235,7 @@ export async function requestInvoiceBatch(
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        [INVOICE_CLIENT_PROTOCOL_HEADER]: INVOICE_CLIENT_PROTOCOL_VERSION,
       },
       body: JSON.stringify(input),
     });

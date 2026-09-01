@@ -1,5 +1,6 @@
 export type InfrastructureErrorCode =
   | "INVALID_INPUT"
+  | "CLIENT_UPGRADE_REQUIRED"
   | "UNSAFE_URL"
   | "TIMEOUT"
   | "NETWORK_ERROR"

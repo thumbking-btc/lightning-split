@@ -77,6 +77,8 @@ LUD-21은 recipient provider의 settlement attestation을 조회하는 경로입
 
 invoice 발급 API는 서버에 replay 상태를 저장하지 않는 stateless 경로입니다. `requestId`는 이전 클라이언트와의 요청 형식 호환을 위해 남겨 두지만 Worker가 같은 ID의 과거 응답을 보관하거나 재생하지 않습니다.
 
+클라이언트는 invoice 발급 요청에 현재 발급 프로토콜 번호를 함께 보냅니다. Worker는 번호가 없거나 지원하지 않는 요청을 provider discovery와 callback 전에 `CLIENT_UPGRADE_REQUIRED`로 거절합니다. 이 제한은 새 payable invoice 생성에만 적용하며, 이미 발급된 invoice의 settlement 조회는 구버전 클라이언트에서도 계속 허용합니다. 운영 PWA는 새 배포를 자동 감지하되 사용자가 업데이트 버튼을 눌러 안전한 시점에 새 Service Worker를 활성화합니다.
+
 브라우저가 `/api/invoices`의 응답을 받지 못한 네트워크 수준 실패는 발급 결과가 불명확하므로 자동 재전송하지 않습니다. 클라이언트는 이를 `ISSUANCE_UNKNOWN`으로 처리하고, 정산자가 받는 지갑의 상태를 확인한 뒤 새 정산을 시작하도록 안내합니다. 반대로 Worker가 provider discovery 또는 callback의 명시적 실패 응답을 정상적으로 돌려준 경우에는 해당 실패 원인과 retryable 여부를 화면에 반영합니다.
 
 정상적으로 받은 BOLT11은 즉시 QR로 노출하지 않습니다. 먼저 브라우저 IndexedDB에 저장할 때까지 `awaitingPersistence` 상태로 유지하고, 저장이 성공한 invoice만 결제 QR로 표시합니다. 저장에 실패하면 해당 invoice는 화면에 표시하지 않고 실패 상태로 전환합니다.

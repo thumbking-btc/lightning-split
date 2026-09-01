@@ -2,6 +2,10 @@ import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestBolt11 } from "../src/test/bolt11-fixture";
+import {
+  INVOICE_CLIENT_PROTOCOL_HEADER,
+  INVOICE_CLIENT_PROTOCOL_VERSION,
+} from "../src/api/contracts";
 import worker, { handleApiRequest } from "./index";
 import { network } from "./test/network";
 
@@ -22,6 +26,7 @@ function apiRequest(
   path: string,
   body?: unknown,
   origin = APP_ORIGIN,
+  invoiceProtocol: string | null = INVOICE_CLIENT_PROTOCOL_VERSION,
 ): Request<unknown, IncomingRequestCfProperties> {
   return new IncomingRequest(`${APP_ORIGIN}${path}`, {
     method: body === undefined ? "GET" : "POST",
@@ -32,6 +37,11 @@ function apiRequest(
             Accept: "application/json",
             "Content-Type": "application/json",
             Origin: origin,
+            ...(path === "/api/invoices" && invoiceProtocol !== null
+              ? {
+                  [INVOICE_CLIENT_PROTOCOL_HEADER]: invoiceProtocol,
+                }
+              : {}),
           },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
@@ -214,6 +224,35 @@ describe("Lightning Split Worker API", () => {
     expect(provider.discovery).toHaveBeenCalledTimes(2);
     expect(provider.callback).toHaveBeenCalledTimes(4);
   });
+
+  it.each([
+    { name: "missing", protocol: null },
+    { name: "unsupported", protocol: "0" },
+  ])(
+    "rejects a $name invoice protocol before contacting the provider",
+    async ({ protocol }) => {
+      const provider = mockInvoiceProvider();
+      const response = await callWorker(
+        apiRequest(
+          "/api/invoices",
+          invoiceRequest(`old-client-${protocol ?? "missing"}`, 1),
+          APP_ORIGIN,
+          protocol,
+        ),
+      );
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "CLIENT_UPGRADE_REQUIRED",
+          retryable: false,
+        },
+      });
+      expect(provider.discovery).not.toHaveBeenCalled();
+      expect(provider.callback).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows a safe retry after discovery fails before any provider callback", async () => {
     const request = invoiceRequest("retry-after-discovery-failure", 1);

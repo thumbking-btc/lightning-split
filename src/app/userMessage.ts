@@ -3,6 +3,8 @@ import type { Language } from "./preferences";
 
 const ERROR_MESSAGES_KO: Readonly<Record<string, string>> = Object.freeze({
   INVALID_INPUT: "입력 내용을 다시 확인하십시오.",
+  CLIENT_UPGRADE_REQUIRED:
+    "안전한 결제를 위해 새 버전이 필요합니다. 화면 아래 업데이트 버튼을 누른 뒤 다시 시도하십시오.",
   TIMEOUT: "응답이 늦어지고 있습니다. 잠시 후 다시 시도하십시오.",
   NETWORK_ERROR: "네트워크 연결을 확인하고 다시 시도하십시오.",
   HTTP_ERROR:
@@ -26,6 +28,8 @@ const ERROR_MESSAGES_KO: Readonly<Record<string, string>> = Object.freeze({
 
 const ERROR_MESSAGES_EN: Readonly<Record<string, string>> = Object.freeze({
   INVALID_INPUT: "Check the information you entered.",
+  CLIENT_UPGRADE_REQUIRED:
+    "A newer version is required for safe payments. Use the update button below, then try again.",
   TIMEOUT: "The response is taking too long. Try again shortly.",
   NETWORK_ERROR: "Check your network connection and try again.",
   HTTP_ERROR:

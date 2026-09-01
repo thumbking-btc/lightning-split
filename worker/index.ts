@@ -5,6 +5,8 @@ import type {
   UsdPriceResponseDto,
 } from "../src/api/contracts";
 import {
+  INVOICE_CLIENT_PROTOCOL_HEADER,
+  INVOICE_CLIENT_PROTOCOL_VERSION,
   parseBatchInvoiceRequest,
   parseSettlementRequest,
 } from "../src/api/contracts";
@@ -81,6 +83,7 @@ function assertSameOrigin(request: Request): void {
 }
 
 function errorStatus(error: InfrastructureError): number {
+  if (error.code === "CLIENT_UPGRADE_REQUIRED") return 409;
   if (error.code === "RATE_LIMITED") return 429;
   if (error.code === "TIMEOUT") return 504;
   if (error.code === "NETWORK_ERROR" || error.code === "HTTP_ERROR") return 502;
@@ -88,6 +91,18 @@ function errorStatus(error: InfrastructureError): number {
   if (error.code === "RESPONSE_TOO_LARGE") return 413;
   if (error.code === "CONFIGURATION_ERROR") return 500;
   return 400;
+}
+
+function assertInvoiceClientProtocol(request: Request): void {
+  if (
+    request.headers.get(INVOICE_CLIENT_PROTOCOL_HEADER) !==
+    INVOICE_CLIENT_PROTOCOL_VERSION
+  ) {
+    throw new InfrastructureError(
+      "CLIENT_UPGRADE_REQUIRED",
+      "새 버전이 필요합니다. 화면 아래 업데이트 버튼을 누른 뒤 다시 시도하십시오.",
+    );
+  }
 }
 
 function errorResponse(error: unknown, path: string): Response {
@@ -250,6 +265,7 @@ async function handleInvoices(
   env: AppEnv,
 ): Promise<Response> {
   assertSameOrigin(request);
+  assertInvoiceClientProtocol(request);
   await enforceRateLimit(request, env.INVOICE_RATE_LIMITER, "invoices");
   const input = parseBatchInvoiceRequest(await readBoundedRequestJson(request));
   const secret = optionalVerificationSecret(env);
