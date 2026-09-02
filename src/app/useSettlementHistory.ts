@@ -55,7 +55,9 @@ export function useSettlementHistory() {
   }, []);
 
   useEffect(() => {
-    void refresh().then(() => reconcile());
+    const initialTimer = window.setTimeout(() => {
+      void refresh().then(() => reconcile());
+    }, 0);
     const timer = window.setInterval(
       () => void reconcile(),
       RECONCILIATION_INTERVAL_MS,
@@ -67,6 +69,7 @@ export function useSettlementHistory() {
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("online", online);
     return () => {
+      window.clearTimeout(initialTimer);
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("online", online);
