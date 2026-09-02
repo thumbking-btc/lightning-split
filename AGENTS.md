@@ -4,17 +4,21 @@
 
 ## 프로젝트 탐색
 
-- 이 프로젝트는 Node.js 22와 npm을 사용합니다. `src/`에는 React·TypeScript·Vite 기반 PWA와 도메인 로직이 있고, `worker/`에는 Cloudflare Worker API와 SQLite 기반 Durable Object가 있습니다. 브라우저 상태는 IndexedDB를 사용합니다.
-- 변경 전에는 `README.md`, `package.json`, 관련 소스와 인접 테스트, 해당 경로의 설정을 먼저 확인하십시오. 결제·invoice·정산 구조를 바꾸는 경우 `docs/payment-architecture.md`도 확인하십시오.
+- 이 프로젝트는 Node.js 22와 npm을 사용합니다. `src/`에는 React·TypeScript·Vite 기반 PWA와 도메인 로직이 있고, `worker/`에는 Cloudflare Worker API가 있습니다. 브라우저 상태는 IndexedDB를 사용합니다.
+- GitHub 원격 저장소를 기준(source of truth)으로 삼고, 로컬 파일이나 worktree는 GitHub에서 체크아웃한 작업 사본으로만 취급하십시오. 현재 브랜치·원격 상태·`main`·열린 PR을 먼저 확인한 뒤 작업하십시오.
+- Cloudflare 리소스는 현재 저장소 설정을 직접 확인해 판단하십시오. 과거에 Durable Object·KV·D1·R2를 사용했다는 이유만으로 현재도 사용한다고 가정하지 마십시오.
+- 변경 전에는 `README.md`, `package.json`, 관련 소스와 인접 테스트, 해당 경로의 설정을 먼저 확인하십시오. 결제·invoice·정산 구조를 바꾸는 경우 `docs/payment-architecture.md`와 `docs/payment-verification-standards.md`도 확인하십시오.
 - `prototype.html`은 실제 앱과 분리하여 보존하는 과거 참고 자료이며, `public/sw.js`는 기존 서비스 워커의 전환 경로입니다. 사용되지 않는 파일로 단정하여 삭제하거나 용도를 바꾸지 마십시오.
 
 ## 브랜치와 운영
 
 - `main`은 production 브랜치입니다. 사용자의 명시적 승인 없이 `main`을 직접 수정하거나 `main`으로 merge하거나 `main`을 push하지 마십시오.
-- 작업은 별도 feature branch 또는 격리된 worktree에서 수행하십시오.
-- 프리뷰 Worker 배포는 production 배포로 간주하지 않습니다. 휴대폰에서 확인할 수 있어야 하는 앱 변경은 검증을 마친 뒤 기존 프리뷰 Worker에 바로 배포하고, 실제로 열린다는 것을 확인한 프리뷰 PWA 링크를 사용자에게 제공하십시오. 사용자가 프리뷰 배포를 하지 말라고 명시한 경우에만 생략하십시오.
-- 승인 제한은 `main` 브랜치와 메인 production Worker에 적용합니다. 사용자의 명시적 승인 없이 `main` 수정·merge·push 또는 메인 production Worker 배포를 수행하지 마십시오.
-- 사용자의 명시적 승인 없이 commit 또는 push하지 마십시오.
+- 개발 작업은 최신 원격 `main`에서 별도 `feature/*` 브랜치를 만들거나, 이미 승인된 해당 feature 브랜치를 사용하여 수행하십시오.
+- 사용자가 feature 개발·수정을 요청한 경우 그 feature 브랜치의 commit·push는 작업의 정상적인 일부로 간주합니다. 의미 있는 변경 단위마다 이유가 남는 commit을 만들고 GitHub에 push하여, 중요한 작업을 장시간 로컬에만 보관하지 마십시오. 같은 feature 작업에 대해 commit·push 승인을 매번 다시 요구하지 마십시오.
+- 사용자의 명시적 승인이 필요한 것은 `main` 수정·merge·push와 메인 production Worker 배포입니다.
+- feature 브랜치가 작업 중 최신 `main`보다 뒤처지면 Preview 또는 최종 병합 판단 전에 최신 `main`의 변경을 feature에 통합하고, 충돌 여부와 회귀를 다시 검증하십시오. 기존 `main`의 변경을 feature 전체로 덮어쓰지 마십시오.
+- 휴대폰에서 확인할 수 있어야 하는 앱 변경은 가능한 경우 현재 feature 브랜치의 Cloudflare Preview URL을 사용하십시오. Preview가 기술적으로 불가능할 때만 원인을 확인한 뒤 격리된 임시 Preview 방식을 사용하십시오.
+- 프리뷰 Worker 배포는 production 배포로 간주하지 않습니다. 검증을 마친 뒤 실제로 열린다는 것을 확인한 프리뷰 PWA 링크를 사용자에게 제공하십시오. 사용자가 프리뷰 배포를 하지 말라고 명시한 경우에만 생략하십시오.
 
 ## 변경 원칙
 
@@ -41,7 +45,7 @@
 - 비밀키, mnemonic, seed, API secret, token 또는 실제 사용자 자격 증명을 코드, 로그, 테스트 fixture, 문서에 실제 값으로 추가하지 마십시오.
 - 외부 가격 API, Lightning provider와 서비스, Cloudflare 등의 응답을 무조건 신뢰하지 마십시오. 실패, 지연, timeout, 잘못된 형식이나 값, 불일치 및 재시도에 따른 중복 가능성을 고려하십시오.
 - PWA 변경 시 캐시, 서비스 워커 수명주기, 업데이트와 오프라인 동작, 기존 사용자의 오래된 클라이언트와 새 배포의 조합을 검토하십시오.
-- Cloudflare Workers 또는 Durable Objects 변경 시 상태와 영속 데이터, migration 필요 여부 및 기존 배포와의 호환성을 확인하십시오.
+- Cloudflare Workers 또는 상태 저장 리소스를 변경할 때는 상태와 영속 데이터, migration 필요 여부 및 기존 배포와의 호환성을 확인하십시오.
 
 ## 검증
 
@@ -56,7 +60,7 @@ npm run test:worker
 npm run build
 ```
 
-필요한 경우 최종 통합 검증으로 `npm run verify`를 사용하십시오. 테스트 통과만으로 변경이 옳다고 단정하지 말고 관련 실제 사용자 흐름과 회귀 가능성도 검토하십시오.
+필요한 경우 최종 통합 검증으로 `npm run verify`를 사용하십시오. 새 기능을 추가했다면 해당 기능의 정상 경로뿐 아니라 실패·만료·재시도·복구·호환 경로를 검증하는 테스트도 함께 추가하십시오. 테스트 통과만으로 변경이 옳다고 단정하지 말고 관련 실제 사용자 흐름과 회귀 가능성도 검토하십시오.
 
 ## 적대적 감사 프로토콜
 
