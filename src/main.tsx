@@ -5,6 +5,7 @@ import { AppWithSettlementHistory } from "./app/AppWithSettlementHistory";
 import { CreatorContact } from "./app/CreatorContact";
 import "./app/LanguagePreferences.css";
 import { PwaVersionStatus } from "./app/PwaVersionStatus";
+import "./app/SettlementHistoryLayout.css";
 
 const rootElement = document.getElementById("root");
 
