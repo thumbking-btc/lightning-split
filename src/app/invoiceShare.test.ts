@@ -136,7 +136,9 @@ describe("invoice share fallback", () => {
 
     const share = vi
       .fn()
-      .mockRejectedValueOnce(new DOMException("file blocked", "NotAllowedError"))
+      .mockRejectedValueOnce(
+        new DOMException("file blocked", "NotAllowedError"),
+      )
       .mockResolvedValueOnce(undefined);
     Object.defineProperty(navigator, "share", {
       configurable: true,
