@@ -89,7 +89,7 @@ describe("SettlementHistoryScreen", () => {
     expect(html).toContain("정산 현황 열기");
   });
 
-  it("shows a late-payment duplicate warning on a completed record", () => {
+  it("keeps a completed record visible when late-payment evidence exists", () => {
     const html = renderHistory({
       records: [
         completedRecord({
@@ -119,7 +119,6 @@ describe("SettlementHistoryScreen", () => {
         completedRecord({
           inputMode: "usd",
           totalAmount: "2500",
-          payerShareSats: undefined,
           payerShareUsdCents: "1250",
           slots: [
             {
