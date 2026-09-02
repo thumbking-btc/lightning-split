@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 
 import {
   prepareInvoiceShareFile,
-  shareBareInvoicePaymentRequest,
+  shareInvoicePaymentRequest,
+  type InvoiceShareInput,
 } from "./invoiceShare";
 import {
   initialLanguage,
@@ -14,6 +15,8 @@ import { buildQrPayload } from "./qr";
 
 const MAX_QR_CACHE_ENTRIES = 24;
 const qrDataUrlCache = new Map<string, Promise<string>>();
+
+type QrCodeShareInput = Omit<InvoiceShareInput, "invoice" | "language">;
 
 function qrDataUrl(invoice: string): Promise<string> {
   const cached = qrDataUrlCache.get(invoice);
@@ -46,7 +49,7 @@ function qrDataUrl(invoice: string): Promise<string> {
 }
 
 function shareFeedback(
-  result: Awaited<ReturnType<typeof shareBareInvoicePaymentRequest>>,
+  result: Awaited<ReturnType<typeof shareInvoicePaymentRequest>>,
   language: Language,
 ): string | undefined {
   if (result === "sharedWithQr") {
@@ -72,7 +75,13 @@ function shareFeedback(
   return undefined;
 }
 
-export function QrCode({ invoice }: { readonly invoice: string }) {
+export function QrCode({
+  invoice,
+  shareInput,
+}: {
+  readonly invoice: string;
+  readonly shareInput: QrCodeShareInput;
+}) {
   const [dataUrl, setDataUrl] = useState<string>();
   const [error, setError] = useState<string>();
   const [language, setLanguage] = useState<Language>(() => initialLanguage());
@@ -120,9 +129,11 @@ export function QrCode({ invoice }: { readonly invoice: string }) {
         className="secondary-button full qr-share-button"
         type="button"
         onClick={() =>
-          void shareBareInvoicePaymentRequest(invoice, language).then(
-            (result) => setFeedback(shareFeedback(result, language)),
-          )
+          void shareInvoicePaymentRequest({
+            ...shareInput,
+            invoice,
+            language,
+          }).then((result) => setFeedback(shareFeedback(result, language)))
         }
       >
         {language === "ko"
