@@ -10,6 +10,7 @@ const RECORD_STORE_NAME = "records";
 const TRACKING_STORE_NAME = "late-payment-trackers";
 const MAX_HISTORY_RECORDS = 200;
 const MAX_TRACKING_TARGETS_PER_PASS = 60;
+const TRACKING_SELECTION_PERIOD_MS = 60_000;
 
 let databasePromise: ReturnType<typeof openDB> | undefined;
 let databaseOperationTail: Promise<void> = Promise.resolve();
@@ -406,6 +407,27 @@ export function listSettlementHistory(): Promise<SettlementHistoryRecord[]> {
   });
 }
 
+export function selectLateSettlementTrackingTargets(
+  targets: readonly LateSettlementTrackingTarget[],
+  nowMs: number,
+): LateSettlementTrackingTarget[] {
+  const ordered = [...targets].sort((a, b) => {
+    const expiryOrder = a.trackingExpiresAt.localeCompare(b.trackingExpiresAt);
+    if (expiryOrder !== 0) return expiryOrder;
+    return `${a.sessionId}:${a.slotNumber}:${a.attempt}:${a.paymentHash}`.localeCompare(
+      `${b.sessionId}:${b.slotNumber}:${b.attempt}:${b.paymentHash}`,
+    );
+  });
+  if (ordered.length <= MAX_TRACKING_TARGETS_PER_PASS) return ordered;
+
+  const period = Math.floor(nowMs / TRACKING_SELECTION_PERIOD_MS);
+  const start = (period * MAX_TRACKING_TARGETS_PER_PASS) % ordered.length;
+  return Array.from(
+    { length: MAX_TRACKING_TARGETS_PER_PASS },
+    (_, offset) => ordered[(start + offset) % ordered.length]!,
+  );
+}
+
 export function listLateSettlementTrackingTargets(
   nowMs = Date.now(),
 ): Promise<LateSettlementTrackingTarget[]> {
@@ -438,9 +460,7 @@ export function listLateSettlementTrackingTargets(
       }
     }
     await transaction.done;
-    return targets
-      .sort((a, b) => a.trackingExpiresAt.localeCompare(b.trackingExpiresAt))
-      .slice(0, MAX_TRACKING_TARGETS_PER_PASS);
+    return selectLateSettlementTrackingTargets(targets, nowMs);
   });
 }
 

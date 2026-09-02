@@ -11,6 +11,8 @@ import {
   deleteSettlementHistoryRecord,
   listLateSettlementTrackingTargets,
   listSettlementHistory,
+  selectLateSettlementTrackingTargets,
+  type LateSettlementTrackingTarget,
 } from "./settlementHistory";
 import type { ClientInvoice, SettlementSession } from "./types";
 
@@ -235,5 +237,32 @@ describe("settlement history lifecycle", () => {
     expect((await listSettlementHistory()).map((record) => record.id)).toEqual([
       "expired-tracker",
     ]);
+  });
+});
+
+describe("late settlement tracking scheduling", () => {
+  it("rotates a bounded batch so later records are not starved", () => {
+    const targets: LateSettlementTrackingTarget[] = Array.from(
+      { length: 120 },
+      (_, index) => ({
+        sessionId: `session-${index.toString().padStart(3, "0")}`,
+        kind: "retired",
+        slotNumber: 1,
+        attempt: index + 1,
+        paymentHash: index.toString(16).padStart(64, "0"),
+        bolt11: `lnbc1${"q".repeat(30)}${index}`,
+        verificationToken: `v2.${"a".repeat(16)}.${"b".repeat(32)}`,
+        trackingExpiresAt: "2030-09-07T13:00:00.000Z",
+      }),
+    );
+
+    const first = selectLateSettlementTrackingTargets(targets, 0);
+    const second = selectLateSettlementTrackingTargets(targets, 60_000);
+
+    expect(first).toHaveLength(60);
+    expect(second).toHaveLength(60);
+    expect(
+      new Set([...first, ...second].map((target) => target.sessionId)).size,
+    ).toBe(120);
   });
 });
