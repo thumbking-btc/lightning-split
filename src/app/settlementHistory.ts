@@ -174,6 +174,16 @@ function trackingDeadlineMs(session: SettlementSession): number {
   );
 }
 
+function needsHistoricalTracking(
+  session: SettlementSession,
+  nowMs: number,
+): boolean {
+  return (
+    trackingDeadlineMs(session) > nowMs &&
+    settlementPollingTargets(session, nowMs).length > 0
+  );
+}
+
 async function trimHistoryRecords(
   database: Awaited<ReturnType<typeof openHistoryDatabase>>,
 ) {
@@ -204,7 +214,8 @@ export function archiveCompletedSettlement(
   return serializeDatabaseOperation(async () => {
     const database = await openHistoryDatabase();
     await database.put(RECORD_STORE, record);
-    if (trackingDeadlineMs(session) > Date.now()) {
+    const nowMs = Date.now();
+    if (needsHistoricalTracking(session, nowMs)) {
       const tracker: SettlementHistoryTracker = {
         id: session.id,
         archivedAt,
@@ -212,6 +223,8 @@ export function archiveCompletedSettlement(
       };
       await database.put(TRACKER_STORE, tracker);
     } else {
+      // A fully network-confirmed settlement with no unresolved historical
+      // invoice has nothing left to verify. Do not retain BOLT11/hash/token data.
       await database.delete(TRACKER_STORE, session.id);
     }
     await trimHistoryRecords(database);
@@ -290,12 +303,11 @@ export function reconcileSettlementHistory(
     )) as SettlementHistoryTracker[];
     for (const tracker of trackers) {
       if (!tracker?.session || typeof tracker.id !== "string") continue;
-      if (trackingDeadlineMs(tracker.session) <= nowMs) {
+      if (!needsHistoricalTracking(tracker.session, nowMs)) {
         await database.delete(TRACKER_STORE, tracker.id);
         continue;
       }
       const reconciled = await reconcileTracker(tracker, nowMs);
-      await database.put(TRACKER_STORE, reconciled);
       await database.put(
         RECORD_STORE,
         createSettlementHistorySnapshot(
@@ -303,6 +315,11 @@ export function reconcileSettlementHistory(
           reconciled.archivedAt,
         ),
       );
+      if (needsHistoricalTracking(reconciled.session, nowMs)) {
+        await database.put(TRACKER_STORE, reconciled);
+      } else {
+        await database.delete(TRACKER_STORE, tracker.id);
+      }
     }
     const records = (await database.getAll(
       RECORD_STORE,
