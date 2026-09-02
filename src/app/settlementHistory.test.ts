@@ -115,14 +115,17 @@ describe("settlement history lifecycle", () => {
 
   it("refuses to archive a settlement while a participant is still pending", async () => {
     const session = completedSession("pending");
+    const settledSlot = session.slots[0]!;
+    const {
+      settledAt: _settledAt,
+      settlementEvidence: _settlementEvidence,
+      ...pendingSlot
+    } = settledSlot;
+    void _settledAt;
+    void _settlementEvidence;
     const pending: SettlementSession = {
       ...session,
-      slots: session.slots.map((slot) => ({
-        ...slot,
-        status: "pending" as const,
-        settledAt: undefined,
-        settlementEvidence: undefined,
-      })),
+      slots: [{ ...pendingSlot, status: "pending" }],
     };
 
     await expect(archiveCompletedSettlement(pending)).rejects.toThrow(
