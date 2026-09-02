@@ -22,7 +22,9 @@ describe("settlement lifecycle actions", () => {
     expect(NEW_SETTLEMENT_PENDING_CONFIRMATION).toBe(
       NEW_SETTLEMENT_PENDING_BLOCKED,
     );
-    expect(NEW_SETTLEMENT_PENDING_CONFIRMATION).not.toContain("시작하시겠습니까");
+    expect(NEW_SETTLEMENT_PENDING_CONFIRMATION).not.toContain(
+      "시작하시겠습니까",
+    );
   });
 
   it("allows completion only when every slot is settled or manually confirmed", () => {
