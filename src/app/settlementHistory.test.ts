@@ -146,6 +146,25 @@ describe("settlement history", () => {
     ]);
   });
 
+  it(
+    "keeps only the newest two hundred completed settlement records",
+    async () => {
+      const base = Date.parse("2030-01-01T00:00:00.000Z");
+      for (let index = 0; index <= 200; index += 1) {
+        await archiveCompletedSettlement(
+          session(`cap-${index}`, new Date(base + index * 1_000).toISOString()),
+        );
+      }
+
+      const records = await listSettlementHistory();
+      expect(records).toHaveLength(200);
+      expect(records[0]?.id).toBe("cap-200");
+      expect(records.at(-1)?.id).toBe("cap-1");
+      expect(records.some((record) => record.id === "cap-0")).toBe(false);
+    },
+    10_000,
+  );
+
   it("does not retain payment secrets after every invoice is network-confirmed", async () => {
     await archiveCompletedSettlement(
       session("network-settled", "2030-08-31T12:00:00.000Z"),
