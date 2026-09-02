@@ -14,6 +14,16 @@ const input = {
   expiresAt: "2030-08-31T13:00:00.000Z",
 } as const;
 
+const usdInput = {
+  slotNumber: 2,
+  displayName: "민수",
+  usdCentsShare: "2500",
+  targetSats: "15625",
+  invoice: "lnbc1canonicalinvoice",
+  expiresAt: "2030-08-31T13:00:00.000Z",
+  language: "en",
+} as const;
+
 function fakeFile(): File {
   return { name: "qr.png", type: "image/png" } as File;
 }
@@ -29,12 +39,7 @@ describe("invoice share text", () => {
   });
 
   it("formats USD explicitly with the dollar symbol", () => {
-    const text = buildInvoiceShareText({
-      ...input,
-      krwShare: undefined,
-      usdCentsShare: "2500",
-      language: "en",
-    });
+    const text = buildInvoiceShareText(usdInput);
     expect(text).toContain("$25.00");
     expect(text).toContain("Amount:");
   });
@@ -42,7 +47,9 @@ describe("invoice share text", () => {
 
 describe("invoice share transport", () => {
   it("shares QR file and text when file sharing is supported", async () => {
-    const nativeShare = vi.fn(async () => undefined);
+    const nativeShare = vi.fn<(data: ShareData) => Promise<void>>(async () =>
+      Promise.resolve(),
+    );
     const result = await shareInvoicePaymentRequest(input, {
       nativeShare,
       nativeCanShare: () => true,
@@ -73,7 +80,9 @@ describe("invoice share transport", () => {
   });
 
   it("falls back to text sharing when QR generation fails", async () => {
-    const nativeShare = vi.fn(async () => undefined);
+    const nativeShare = vi.fn<(data: ShareData) => Promise<void>>(async () =>
+      Promise.resolve(),
+    );
     const result = await shareInvoicePaymentRequest(input, {
       nativeShare,
       nativeCanShare: () => true,
@@ -87,7 +96,7 @@ describe("invoice share transport", () => {
   });
 
   it("uses clipboard only after native file and text sharing both fail", async () => {
-    const nativeShare = vi.fn(async () => {
+    const nativeShare = vi.fn<(data: ShareData) => Promise<void>>(async () => {
       throw Object.assign(new Error("blocked"), { name: "NotAllowedError" });
     });
     const copyText = vi.fn(async () => true);
@@ -103,7 +112,7 @@ describe("invoice share transport", () => {
   });
 
   it("treats only AbortError as an intentional share cancellation", async () => {
-    const nativeShare = vi.fn(async () => {
+    const nativeShare = vi.fn<(data: ShareData) => Promise<void>>(async () => {
       throw Object.assign(new Error("cancelled"), { name: "AbortError" });
     });
     const copyText = vi.fn(async () => true);
