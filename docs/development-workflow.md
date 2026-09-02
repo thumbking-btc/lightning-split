@@ -30,3 +30,7 @@ latest main
 Creating commits or pushing to a feature branch does **not** require production approval. Merging a feature branch into `main`, pushing feature code directly to `main`, or otherwise changing production does require explicit user approval.
 
 When `main` changes while a feature is in progress, update the feature against the latest `main`, resolve only genuine conflicts, and run the full verification suite again. The desired result is the latest `main` plus the feature changes, not replacement of the latest `main` with an older feature snapshot.
+
+## Runtime and safety parity
+
+Keep one intentional application entrypoint for production and Preview builds. If legacy or alternate application exports remain temporarily for tests or shared UI code, they must preserve the same payment-safety guards as the active entrypoint. An alternate entrypoint must never permit an unfinished settlement to be discarded merely because it is not the currently selected runtime component.
