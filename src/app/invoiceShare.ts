@@ -16,11 +16,7 @@ export interface InvoiceShareInput {
 }
 
 export type InvoiceShareResult =
-  | "shared-file"
-  | "shared-text"
-  | "copied"
-  | "cancelled"
-  | "failed";
+  "shared-file" | "shared-text" | "copied" | "cancelled" | "failed";
 
 interface InvoiceShareDependencies {
   readonly nativeShare?: (data: ShareData) => Promise<void>;

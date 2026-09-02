@@ -83,7 +83,9 @@ describe("SettlementHistoryScreen", () => {
 
     expect(html).toContain("진행 중인 정산");
     expect(html).toContain("0/1명 완료");
-    expect(html).toContain("만료된 QR은 정산 화면에서 새로 만들어 다시 공유할 수 있습니다");
+    expect(html).toContain(
+      "만료된 QR은 정산 화면에서 새로 만들어 다시 공유할 수 있습니다",
+    );
     expect(html).toContain("정산 현황 열기");
   });
 
