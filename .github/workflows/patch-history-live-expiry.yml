@@ -1,0 +1,65 @@
+name: Patch history live expiry
+
+on:
+  push:
+    branches:
+      - feature/settlement-history-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/settlement-history-v2
+      - name: Apply exact history clock patch
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/app/SettlementHistory.tsx';
+          let source = fs.readFileSync(path, 'utf8');
+          const replacements = [
+            [
+              'import { useMemo, useState } from "react";',
+              'import { useEffect, useMemo, useState } from "react";',
+            ],
+            [
+              '  const [nowMs] = useState(() => Date.now());\n  const deleteRecord = async () => {',
+              '  const [nowMs, setNowMs] = useState(() => Date.now());\n  useEffect(() => {\n    if (!active) return;\n    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);\n    return () => window.clearInterval(timer);\n  }, [active]);\n\n  const deleteRecord = async () => {',
+            ],
+          ];
+          for (const [before, after] of replacements) {
+            const count = source.split(before).length - 1;
+            if (count !== 1) throw new Error(`Expected one match, found ${count}: ${before}`);
+            source = source.replace(before, after);
+          }
+          fs.writeFileSync(path, source);
+          NODE
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Format patched file
+        run: npx prettier --write src/app/SettlementHistory.tsx
+      - name: Commit patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No patch required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/app/SettlementHistory.tsx
+          git commit -m "fix: update active history expiry in real time"
+          git push origin HEAD:feature/settlement-history-v2
