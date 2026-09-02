@@ -1,6 +1,7 @@
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 
+import { prepareInvoiceShareFile } from "./invoiceShare";
 import { buildQrPayload } from "./qr";
 
 const MAX_QR_CACHE_ENTRIES = 24;
@@ -42,6 +43,7 @@ export function QrCode({ invoice }: { readonly invoice: string }) {
 
   useEffect(() => {
     let active = true;
+    void prepareInvoiceShareFile(invoice);
     qrDataUrl(invoice)
       .then((url) => {
         if (active) setDataUrl(url);
