@@ -64,6 +64,15 @@ export function buildInvoiceShareText(input: InvoiceShareInput): string {
       ].join("\n");
 }
 
+export function buildBareInvoiceShareText(
+  invoice: string,
+  language: Language = "ko",
+): string {
+  return language === "ko"
+    ? ["Lightning Split 결제 요청", "", "Lightning invoice", invoice].join("\n")
+    : ["Lightning Split payment request", "", "Lightning invoice", invoice].join("\n");
+}
+
 function isUserCancellation(cause: unknown): boolean {
   return cause instanceof DOMException && cause.name === "AbortError";
 }
@@ -109,15 +118,21 @@ function preparedInvoiceShareFile(invoice: string): File | undefined {
   return qrFileCache.get(invoice);
 }
 
-async function shareText(text: string, language: Language): Promise<InvoiceShareResult | undefined> {
+function shareTitle(language: Language): string {
+  return language === "ko"
+    ? "Lightning Split 결제 요청"
+    : "Lightning Split payment request";
+}
+
+async function shareText(
+  text: string,
+  language: Language,
+): Promise<InvoiceShareResult | undefined> {
   if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
     return undefined;
   }
   try {
-    await navigator.share({
-      title: language === "ko" ? "Lightning Split 결제 요청" : "Lightning Split payment request",
-      text,
-    });
+    await navigator.share({ title: shareTitle(language), text });
     return "sharedText";
   } catch (cause) {
     if (isUserCancellation(cause)) return "cancelled";
@@ -125,14 +140,13 @@ async function shareText(text: string, language: Language): Promise<InvoiceShare
   }
 }
 
-export async function shareInvoicePaymentRequest(
-  input: InvoiceShareInput,
+async function sharePreparedInvoice(
+  invoice: string,
+  text: string,
+  language: Language,
 ): Promise<InvoiceShareResult> {
-  const language = input.language ?? "ko";
-  const text = buildInvoiceShareText(input);
-
   if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-    const file = preparedInvoiceShareFile(input.invoice);
+    const file = preparedInvoiceShareFile(invoice);
     if (file) {
       try {
         const canShareFile =
@@ -140,10 +154,7 @@ export async function shareInvoicePaymentRequest(
           navigator.canShare({ files: [file] });
         if (canShareFile) {
           await navigator.share({
-            title:
-              language === "ko"
-                ? "Lightning Split 결제 요청"
-                : "Lightning Split payment request",
+            title: shareTitle(language),
             text,
             files: [file],
           });
@@ -151,8 +162,9 @@ export async function shareInvoicePaymentRequest(
         }
       } catch (cause) {
         if (isUserCancellation(cause)) return "cancelled";
-        // File sharing may be rejected independently from text sharing.
-        // Continue to the text-only Web Share fallback.
+        // File sharing can fail independently of text sharing. Continue to the
+        // text-only Web Share fallback while the user activation is still tied
+        // to the original button action.
       }
     }
 
@@ -161,4 +173,26 @@ export async function shareInvoicePaymentRequest(
   }
 
   return (await copyTextToClipboard(text)) ? "copied" : "failed";
+}
+
+export function shareInvoicePaymentRequest(
+  input: InvoiceShareInput,
+): Promise<InvoiceShareResult> {
+  const language = input.language ?? "ko";
+  return sharePreparedInvoice(
+    input.invoice,
+    buildInvoiceShareText(input),
+    language,
+  );
+}
+
+export function shareBareInvoicePaymentRequest(
+  invoice: string,
+  language: Language = "ko",
+): Promise<InvoiceShareResult> {
+  return sharePreparedInvoice(
+    invoice,
+    buildBareInvoiceShareText(invoice, language),
+    language,
+  );
 }
