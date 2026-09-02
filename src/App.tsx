@@ -5,8 +5,9 @@ import type { PriceSnapshotDto } from "./api/serialization";
 import { ApiClientError, requestInvoiceBatch } from "./app/api";
 import { scrollCarouselToIndex } from "./app/carousel";
 import { copyTextToClipboard, readTextFromClipboard } from "./app/clipboard";
-import { uiCopy } from "./app/i18n";
 import { heroLine1For } from "./app/heroCopy";
+import { uiCopy } from "./app/i18n";
+import { shareInvoicePaymentRequest } from "./app/invoiceShare";
 import {
   isLightningInvoiceInput,
   LIGHTNING_INVOICE_INPUT_MESSAGE,
@@ -32,10 +33,18 @@ import {
   usdInputToCents,
 } from "./app/preferences";
 import { QrCode } from "./app/QrCode";
+import { SettlementHistoryScreen } from "./app/SettlementHistory";
 import {
+  archiveCompletedSettlement,
+  deleteSettlementHistoryRecord,
+  listSettlementHistory,
+  type SettlementHistoryRecord,
+} from "./app/settlementHistory";
+import {
+  ABANDON_PENDING_SETTLEMENT_CONFIRMATION,
   DELETE_SETTLEMENT_RECORD_CONFIRMATION,
   hasPendingSettlement,
-  NEW_SETTLEMENT_PENDING_CONFIRMATION,
+  NEW_SETTLEMENT_PENDING_MESSAGE,
 } from "./app/sessionActions";
 import {
   annotateSettledSlot,
@@ -49,8 +58,8 @@ import {
   firstActionableSlotIndex,
   getSettlementProgress,
   manuallyConfirmSlot,
-  markPendingInvoicesPersisted,
   markExpiredSlots,
+  markPendingInvoicesPersisted,
   nextActionableSlotIndex,
   pendingInvoicePersistenceIdentities,
   prepareSlotRetry,
@@ -59,16 +68,17 @@ import {
   undoManualConfirmation,
 } from "./app/session";
 import type { ClientSlot, SettlementSession } from "./app/types";
+import { useArchivedSettlementMonitoring } from "./app/useArchivedSettlementMonitoring";
 import {
   useMarketInformation,
   type MarketInformationState,
 } from "./app/useMarketInformation";
+import { useSettlementPolling } from "./app/useSettlementPolling";
 import {
   useUsdMarketInformation,
   type UsdMarketInformationState,
 } from "./app/useUsdMarketInformation";
 import { toUserMessage } from "./app/userMessage";
-import { useSettlementPolling } from "./app/useSettlementPolling";
 import { DEFAULT_LIGHTNING_POLICY } from "./config/policies";
 import type { InputMode } from "./domain/models";
 import { MAX_PEOPLE, MIN_PEOPLE } from "./domain/money";
@@ -274,6 +284,7 @@ export function InvoiceCard({
   const status = slotStatus(slot, language);
   const statusLines = status.label.split(" · ");
   const [copyFeedback, setCopyFeedback] = useState<string>();
+  const [shareFeedback, setShareFeedback] = useState<string>();
   const paymentCapability = slot.invoice
     ? selectPaymentCapability({
         automaticSettlement: slot.invoice.verificationToken !== undefined,
@@ -281,6 +292,41 @@ export function InvoiceCard({
         payeeMemo: slot.invoice.payeeMemo ?? "none",
       })
     : undefined;
+
+  const shareInvoice = async () => {
+    if (!slot.invoice) return;
+    const result = await shareInvoicePaymentRequest({
+      slotNumber: slot.slotNumber,
+      ...(slot.annotation?.displayName
+        ? { displayName: slot.annotation.displayName }
+        : {}),
+      ...(slot.krwShare ? { krwShare: slot.krwShare } : {}),
+      ...(slot.usdCentsShare ? { usdCentsShare: slot.usdCentsShare } : {}),
+      targetSats: slot.targetSats,
+      invoice: slot.invoice.bolt11,
+      expiresAt: slot.invoice.expiresAt,
+      language,
+    });
+    setShareFeedback(
+      result === "shared-file"
+        ? language === "ko"
+          ? "QR 이미지와 결제 요청을 공유했습니다."
+          : "Shared the QR image and payment request."
+        : result === "shared-text"
+          ? language === "ko"
+            ? "QR 이미지 공유를 사용할 수 없어 결제 요청을 텍스트로 공유했습니다."
+            : "QR image sharing was unavailable, so the payment request was shared as text."
+          : result === "copied"
+            ? language === "ko"
+              ? "공유 기능을 사용할 수 없어 결제 요청을 복사했습니다."
+              : "Sharing was unavailable, so the payment request was copied."
+            : result === "failed"
+              ? language === "ko"
+                ? "공유와 복사에 실패했습니다. 아래 결제 요청 복사를 사용하십시오."
+                : "Sharing and automatic copy failed. Use Copy payment request below."
+              : undefined,
+    );
+  };
 
   const copyInvoice = async () => {
     if (!slot.invoice) return;
@@ -423,6 +469,18 @@ export function InvoiceCard({
               ) : (
                 <div className="qr-placeholder dormant" aria-hidden="true" />
               )}
+            </div>
+            <button
+              className="secondary-button full invoice-share-button"
+              type="button"
+              onClick={() => void shareInvoice()}
+            >
+              {language === "ko"
+                ? "QR · 결제 요청 공유"
+                : "Share QR · payment request"}
+            </button>
+            <div className="copy-feedback" aria-live="polite">
+              {shareFeedback}
             </div>
             <button
               className="secondary-button full"
@@ -718,16 +776,22 @@ export function SettlementHeader({
 }
 
 export function SettlementRecordDeleteButton({
+  pending = false,
   language = "ko",
   onDelete,
 }: {
+  readonly pending?: boolean;
   readonly language?: Language;
   readonly onDelete: () => void;
 }) {
   const c = uiCopy(language);
   return (
     <button className="danger-text-button" type="button" onClick={onDelete}>
-      {c.deleteSettlement}
+      {pending
+        ? language === "ko"
+          ? "정산 중단·삭제"
+          : "Abandon and delete settlement"
+        : c.deleteSettlement}
     </button>
   );
 }
@@ -963,6 +1027,11 @@ export function App() {
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
   const [session, setSession] = useState<SettlementSession | null>(null);
+  const [historyRecords, setHistoryRecords] = useState<
+    SettlementHistoryRecord[]
+  >([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyError, setHistoryError] = useState<string>();
   const krwMarketEnabled = inputMode === "krw" || session?.inputMode === "krw";
   const usdMarketEnabled = inputMode === "usd" || session?.inputMode === "usd";
   const {
@@ -1030,6 +1099,14 @@ export function App() {
   );
   useSettlementPolling(session, updateSession);
 
+  const refreshHistory = useCallback(async () => {
+    const records = await listSettlementHistory();
+    setHistoryRecords(records);
+    setHistoryError(undefined);
+  }, []);
+
+  useArchivedSettlementMonitoring(refreshHistory);
+
   const refreshPrice = useCallback(async () => {
     return (await refreshLockedSnapshot()).snapshot;
   }, [refreshLockedSnapshot]);
@@ -1037,6 +1114,16 @@ export function App() {
   const refreshUsdPrice = useCallback(async () => {
     return (await refreshLockedUsdSnapshot()).snapshot;
   }, [refreshLockedUsdSnapshot]);
+
+  useEffect(() => {
+    void refreshHistory().catch(() =>
+      setHistoryError(
+        languageRef.current === "ko"
+          ? "이 기기에 저장된 정산 기록을 불러오지 못했습니다."
+          : "Could not load settlement history stored on this device.",
+      ),
+    );
+  }, [refreshHistory]);
 
   useEffect(() => {
     const restoreEpoch = sessionEpochRef.current;
@@ -1420,21 +1507,64 @@ export function App() {
     }
   };
 
+  const focusFirstPendingSettlement = () => {
+    if (!session) return;
+    const index = firstActionableSlotIndex(session);
+    activeSlotIndexRef.current = index;
+    setActiveSlotIndex(index);
+    scrollCarouselToIndex(carouselRef.current, index, "smooth");
+  };
+
   const newSettlement = async () => {
-    const confirmation =
-      language === "ko"
-        ? NEW_SETTLEMENT_PENDING_CONFIRMATION
-        : "A payment is still pending. Start a new settlement anyway?";
-    if (hasPendingSettlement(session) && !window.confirm(confirmation)) return;
+    if (!session) return;
+    if (hasPendingSettlement(session)) {
+      setError(
+        language === "ko"
+          ? NEW_SETTLEMENT_PENDING_MESSAGE
+          : "This settlement is still in progress. Regenerate and reshare expired payment requests, then start a new settlement after every participant has been confirmed.",
+      );
+      focusFirstPendingSettlement();
+      return;
+    }
+    try {
+      await archiveCompletedSettlement(session);
+      await refreshHistory();
+    } catch {
+      setPersistenceError(
+        language === "ko"
+          ? "완료된 정산을 기록에 안전하게 보관하지 못해 새 정산으로 넘어가지 않았습니다."
+          : "The completed settlement could not be archived safely, so a new settlement was not started.",
+      );
+      return;
+    }
     await resetSession();
   };
 
   const deleteSettlementRecord = async () => {
-    const confirmation =
-      language === "ko"
+    const pending = hasPendingSettlement(session);
+    const confirmation = pending
+      ? language === "ko"
+        ? ABANDON_PENDING_SETTLEMENT_CONFIRMATION
+        : "Abandon and delete this settlement? A still-payable Lightning invoice may receive a later payment that this app can no longer track automatically."
+      : language === "ko"
         ? DELETE_SETTLEMENT_RECORD_CONFIRMATION
-        : "Delete this settlement record from this device?";
+        : "Delete this settlement from this device? Existing Lightning payments and payment requests are not cancelled.";
     if (window.confirm(confirmation)) await resetSession();
+  };
+
+  const deleteHistoryRecord = async (id: string): Promise<boolean> => {
+    try {
+      await deleteSettlementHistoryRecord(id);
+      await refreshHistory();
+      return true;
+    } catch {
+      setHistoryError(
+        language === "ko"
+          ? "이 기기에서 완료 정산 기록을 삭제하지 못했습니다."
+          : "Could not delete the completed settlement record from this device.",
+      );
+      return false;
+    }
   };
 
   const annotate = (slotNumber: number, displayName: string) => {
@@ -1550,8 +1680,23 @@ export function App() {
       </main>
     );
 
+  if (historyOpen) {
+    return (
+      <SettlementHistoryScreen
+        records={historyRecords}
+        activeSession={session}
+        error={historyError}
+        language={language}
+        onClose={() => setHistoryOpen(false)}
+        onOpenActive={() => setHistoryOpen(false)}
+        onDelete={deleteHistoryRecord}
+      />
+    );
+  }
+
   if (session) {
     const progress = getSettlementProgress(session);
+    const complete = progress.completedCount === progress.totalCount;
     const duplicateSettledSlots = duplicateSettledSlotNumbers(session);
     const progressPercent =
       progress.totalCount === 0
@@ -1571,6 +1716,20 @@ export function App() {
           language={language}
           onNewSettlement={() => void newSettlement()}
         />
+        <div className="settlement-navigation">
+          <button
+            className="secondary-button full history-launch-button"
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+          >
+            {language === "ko" ? "정산 기록 보기" : "Settlement history"}
+          </button>
+        </div>
+        {historyError && (
+          <div className="global-warning" role="alert">
+            {historyError}
+          </div>
+        )}
         {session.overallNote &&
           session.providerCommentStatus === "forwarded" && (
             <p className="provider-comment-status" role="status">
@@ -1659,6 +1818,20 @@ export function App() {
             </small>
           )}
         </section>
+        {complete && (
+          <div className="settlement-complete-note" role="status">
+            <strong>
+              {language === "ko"
+                ? "모든 결제가 확인되었습니다."
+                : "All payments are confirmed."}
+            </strong>
+            <span>
+              {language === "ko"
+                ? "새 정산을 시작하면 이 정산을 완료 기록으로 보관합니다."
+                : "Starting a new settlement archives this one as a completed record."}
+            </span>
+          </div>
+        )}
         {persistenceError && (
           <div className="global-warning" role="alert">
             {persistenceError}
@@ -1720,6 +1893,7 @@ export function App() {
         </section>
         <p className="swipe-hint">{c.swipeHint}</p>
         <SettlementRecordDeleteButton
+          pending={!complete}
           language={language}
           onDelete={() => void deleteSettlementRecord()}
         />
@@ -1767,210 +1941,230 @@ export function App() {
         </h1>
         <p>{c.heroDescription}</p>
       </header>
-      <section className="form-card">
-        <AmountInput
-          inputMode={inputMode}
-          totalAmount={totalAmount}
-          language={language}
-          onInputModeChange={changeInputMode}
-          onTotalAmountChange={setTotalAmount}
-        />
-        <div className="people-row">
-          <div>
-            <label htmlFor="people">{c.totalPeople}</label>
-            <small>
-              {c.includeMe} ·{" "}
-              {language === "ko"
-                ? `최대 ${MAX_PEOPLE}명`
-                : `up to ${MAX_PEOPLE}`}
-            </small>
+      <div className="home-action-stack">
+        <button
+          className="secondary-button full history-launch-button"
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+        >
+          {language === "ko" ? "정산 기록 보기" : "Settlement history"}
+        </button>
+        {historyError && (
+          <div className="global-warning" role="alert">
+            {historyError}
           </div>
-          <div className="stepper">
-            <button
-              type="button"
-              aria-label={c.decreasePeople}
-              disabled={totalPeople <= MIN_PEOPLE}
-              onClick={() =>
-                setTotalPeople((value) => Math.max(MIN_PEOPLE, value - 1))
-              }
-            >
-              −
-            </button>
-            <input
-              id="people"
-              aria-label={c.totalPeople}
-              type="number"
-              min={MIN_PEOPLE}
-              max={MAX_PEOPLE}
-              value={totalPeople}
-              onChange={(event) => {
-                const value = event.currentTarget.valueAsNumber;
-                if (!Number.isFinite(value)) return;
-                setTotalPeople(
-                  Math.min(MAX_PEOPLE, Math.max(MIN_PEOPLE, Math.trunc(value))),
-                );
-              }}
-            />
-            <button
-              type="button"
-              aria-label={c.increasePeople}
-              disabled={totalPeople >= MAX_PEOPLE}
-              onClick={() =>
-                setTotalPeople((value) => Math.min(MAX_PEOPLE, value + 1))
-              }
-            >
-              ＋
-            </button>
-          </div>
-        </div>
-        <label className="payer-toggle">
-          <input
-            type="checkbox"
-            checked={excludePayer}
-            onChange={(event) => setExcludePayer(event.target.checked)}
+        )}
+        <section className="form-card">
+          <AmountInput
+            inputMode={inputMode}
+            totalAmount={totalAmount}
+            language={language}
+            onInputModeChange={changeInputMode}
+            onTotalAmountChange={setTotalAmount}
           />
-          <span>
-            <strong>{c.payerPaid}</strong>
-            <small>{c.payerPaidHelp}</small>
-          </span>
-        </label>
-        <label className="stacked-field">
-          {c.myLightningAddress}
-          <span className="input-with-action">
+          <div className="people-row">
+            <div>
+              <label htmlFor="people">{c.totalPeople}</label>
+              <small>
+                {c.includeMe} ·{" "}
+                {language === "ko"
+                  ? `최대 ${MAX_PEOPLE}명`
+                  : `up to ${MAX_PEOPLE}`}
+              </small>
+            </div>
+            <div className="stepper">
+              <button
+                type="button"
+                aria-label={c.decreasePeople}
+                disabled={totalPeople <= MIN_PEOPLE}
+                onClick={() =>
+                  setTotalPeople((value) => Math.max(MIN_PEOPLE, value - 1))
+                }
+              >
+                −
+              </button>
+              <input
+                id="people"
+                aria-label={c.totalPeople}
+                type="number"
+                min={MIN_PEOPLE}
+                max={MAX_PEOPLE}
+                value={totalPeople}
+                onChange={(event) => {
+                  const value = event.currentTarget.valueAsNumber;
+                  if (!Number.isFinite(value)) return;
+                  setTotalPeople(
+                    Math.min(
+                      MAX_PEOPLE,
+                      Math.max(MIN_PEOPLE, Math.trunc(value)),
+                    ),
+                  );
+                }}
+              />
+              <button
+                type="button"
+                aria-label={c.increasePeople}
+                disabled={totalPeople >= MAX_PEOPLE}
+                onClick={() =>
+                  setTotalPeople((value) => Math.min(MAX_PEOPLE, value + 1))
+                }
+              >
+                ＋
+              </button>
+            </div>
+          </div>
+          <label className="payer-toggle">
             <input
-              type="email"
-              autoCapitalize="none"
-              autoCorrect="off"
-              value={lightningAddress}
-              aria-invalid={lightningInvoiceInput}
-              aria-describedby="lightning-address-feedback"
-              onChange={(event) => {
-                setLightningAddress(event.target.value);
-                setNotice(undefined);
-              }}
-              placeholder="name@example.com"
+              type="checkbox"
+              checked={excludePayer}
+              onChange={(event) => setExcludePayer(event.target.checked)}
             />
-            <button type="button" onClick={() => void pasteLightningAddress()}>
-              {c.paste}
-            </button>
-          </span>
-          <small
-            id="lightning-address-feedback"
-            className={`field-feedback ${lightningInvoiceInput ? "input-error" : ""}`}
-            aria-live="polite"
-          >
-            {lightningInvoiceInput ? lightningInvoiceMessage : notice}
-          </small>
-        </label>
-        <details className="optional-fields">
-          <summary>
-            {c.optionalDetails} <span>{c.optional}</span>
-          </summary>
+            <span>
+              <strong>{c.payerPaid}</strong>
+              <small>{c.payerPaidHelp}</small>
+            </span>
+          </label>
           <label className="stacked-field">
-            {c.settlementNote}
-            <input
-              value={overallNote}
-              onChange={(event) => setOverallNote(event.target.value)}
-              placeholder={c.notePlaceholder}
-              maxLength={
-                DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters
-              }
-            />
-            <small>
-              {[...overallNote].length}/
-              {DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters}
-              {language === "ko" ? "자" : " chars"} · {c.noteDeliveryHelp}
+            {c.myLightningAddress}
+            <span className="input-with-action">
+              <input
+                type="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                value={lightningAddress}
+                aria-invalid={lightningInvoiceInput}
+                aria-describedby="lightning-address-feedback"
+                onChange={(event) => {
+                  setLightningAddress(event.target.value);
+                  setNotice(undefined);
+                }}
+                placeholder="name@example.com"
+              />
+              <button
+                type="button"
+                onClick={() => void pasteLightningAddress()}
+              >
+                {c.paste}
+              </button>
+            </span>
+            <small
+              id="lightning-address-feedback"
+              className={`field-feedback ${lightningInvoiceInput ? "input-error" : ""}`}
+              aria-live="polite"
+            >
+              {lightningInvoiceInput ? lightningInvoiceMessage : notice}
             </small>
           </label>
-          <label className="stacked-field">
-            {c.participantCandidates}
-            <textarea
-              value={candidateText}
-              onChange={(event) => setCandidateText(event.target.value)}
-              placeholder={c.participantPlaceholder}
-              rows={2}
-            />
-            <small>{c.participantHelp}</small>
-          </label>
-        </details>
-      </section>
-      <section className="preview-card" aria-live="polite">
-        <div className="section-title">
-          <div>
-            <span className="eyebrow">{c.review}</span>
-            <h2>{c.reviewBeforeStart}</h2>
-          </div>
-          {selectedSnapshot && inputMode !== "sats" && (
-            <button
-              className="text-button touch-target"
-              type="button"
-              onClick={() =>
-                void (
-                  inputMode === "krw" ? refreshPrice() : refreshUsdPrice()
-                ).catch(() => undefined)
-              }
-            >
-              {c.priceRefresh}
-            </button>
-          )}
-        </div>
-        {selectedSnapshot && inputMode !== "sats" && selectedPrice && (
-          <p className="price-line">
-            {inputMode === "krw"
-              ? language === "ko"
-                ? "BTC 기준가격"
-                : "BTC/KRW"
-              : "BTC/USD"}{" "}
-            <strong>{selectedPrice}</strong> ·{" "}
-            {formatPriceTime(selectedSnapshot, language)}
-          </p>
-        )}
-        {selectedMarketError && inputMode !== "sats" && (
-          <p className="inline-error">{selectedMarketError}</p>
-        )}
-        {preview.value ? (
-          <>
-            <SettlementPreviewDetails
-              inputMode={inputMode}
-              totalAmount={totalAmount}
-              totalPeople={totalPeople}
-              preview={preview.value}
-              language={language}
-              {...(selectedSnapshotAt
-                ? { priceSnapshotAt: selectedSnapshotAt }
-                : {})}
-            />
-            <p className="preview-note">
-              {excludePayer ? c.splitPayerRemainder : c.splitFrontRemainder}
-            </p>
-            {inputMode !== "sats" && (
-              <p className="preview-note">{c.priceLockedNote}</p>
+          <details className="optional-fields">
+            <summary>
+              {c.optionalDetails} <span>{c.optional}</span>
+            </summary>
+            <label className="stacked-field">
+              {c.settlementNote}
+              <input
+                value={overallNote}
+                onChange={(event) => setOverallNote(event.target.value)}
+                placeholder={c.notePlaceholder}
+                maxLength={
+                  DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters
+                }
+              />
+              <small>
+                {[...overallNote].length}/
+                {DEFAULT_LIGHTNING_POLICY.maximumProviderCommentCharacters}
+                {language === "ko" ? "자" : " chars"} · {c.noteDeliveryHelp}
+              </small>
+            </label>
+            <label className="stacked-field">
+              {c.participantCandidates}
+              <textarea
+                value={candidateText}
+                onChange={(event) => setCandidateText(event.target.value)}
+                placeholder={c.participantPlaceholder}
+                rows={2}
+              />
+              <small>{c.participantHelp}</small>
+            </label>
+          </details>
+        </section>
+        <section className="preview-card" aria-live="polite">
+          <div className="section-title">
+            <div>
+              <span className="eyebrow">{c.review}</span>
+              <h2>{c.reviewBeforeStart}</h2>
+            </div>
+            {selectedSnapshot && inputMode !== "sats" && (
+              <button
+                className="text-button touch-target"
+                type="button"
+                onClick={() =>
+                  void (
+                    inputMode === "krw" ? refreshPrice() : refreshUsdPrice()
+                  ).catch(() => undefined)
+                }
+              >
+                {c.priceRefresh}
+              </button>
             )}
-          </>
-        ) : totalAmount.trim() ? (
-          <p className="inline-error">{preview.error}</p>
-        ) : (
-          <p className="preview-note">{c.enterAmount}</p>
+          </div>
+          {selectedSnapshot && inputMode !== "sats" && selectedPrice && (
+            <p className="price-line">
+              {inputMode === "krw"
+                ? language === "ko"
+                  ? "BTC 기준가격"
+                  : "BTC/KRW"
+                : "BTC/USD"}{" "}
+              <strong>{selectedPrice}</strong> ·{" "}
+              {formatPriceTime(selectedSnapshot, language)}
+            </p>
+          )}
+          {selectedMarketError && inputMode !== "sats" && (
+            <p className="inline-error">{selectedMarketError}</p>
+          )}
+          {preview.value ? (
+            <>
+              <SettlementPreviewDetails
+                inputMode={inputMode}
+                totalAmount={totalAmount}
+                totalPeople={totalPeople}
+                preview={preview.value}
+                language={language}
+                {...(selectedSnapshotAt
+                  ? { priceSnapshotAt: selectedSnapshotAt }
+                  : {})}
+              />
+              <p className="preview-note">
+                {excludePayer ? c.splitPayerRemainder : c.splitFrontRemainder}
+              </p>
+              {inputMode !== "sats" && (
+                <p className="preview-note">{c.priceLockedNote}</p>
+              )}
+            </>
+          ) : totalAmount.trim() ? (
+            <p className="inline-error">{preview.error}</p>
+          ) : (
+            <p className="preview-note">{c.enterAmount}</p>
+          )}
+        </section>
+        {persistenceError && (
+          <div className="global-warning" role="alert">
+            {persistenceError}
+          </div>
         )}
-      </section>
-      {persistenceError && (
-        <div className="global-warning" role="alert">
-          {persistenceError}
-        </div>
-      )}
-      {error && (
-        <div className="global-error" role="alert">
-          {error}
-        </div>
-      )}
-      <button
-        className="primary-button"
-        type="button"
-        disabled={busy || !preview.value || lightningInvoiceInput}
-        onClick={() => void startSettlement()}
-      >
-        {busy ? c.creatingPayments : c.startSettlement}
-      </button>
+        {error && (
+          <div className="global-error" role="alert">
+            {error}
+          </div>
+        )}
+        <button
+          className="primary-button"
+          type="button"
+          disabled={busy || !preview.value || lightningInvoiceInput}
+          onClick={() => void startSettlement()}
+        >
+          {busy ? c.creatingPayments : c.startSettlement}
+        </button>
+      </div>
       <p className="privacy-note">{c.privacy}</p>
     </main>
   );
