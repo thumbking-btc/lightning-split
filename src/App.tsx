@@ -33,9 +33,10 @@ import {
 } from "./app/preferences";
 import { QrCode } from "./app/QrCode";
 import {
+  DELETE_PENDING_SETTLEMENT_BLOCKED,
   DELETE_SETTLEMENT_RECORD_CONFIRMATION,
   hasPendingSettlement,
-  NEW_SETTLEMENT_PENDING_CONFIRMATION,
+  NEW_SETTLEMENT_PENDING_BLOCKED,
 } from "./app/sessionActions";
 import {
   annotateSettledSlot,
@@ -1435,19 +1436,30 @@ export function App() {
   };
 
   const newSettlement = async () => {
-    const confirmation =
-      language === "ko"
-        ? NEW_SETTLEMENT_PENDING_CONFIRMATION
-        : "A payment is still pending. Start a new settlement anyway?";
-    if (hasPendingSettlement(session) && !window.confirm(confirmation)) return;
+    if (hasPendingSettlement(session)) {
+      window.alert(
+        language === "ko"
+          ? NEW_SETTLEMENT_PENDING_BLOCKED
+          : "This settlement is still in progress. Reissue any expired payment requests and finish every participant before starting a new settlement.",
+      );
+      return;
+    }
     await resetSession();
   };
 
   const deleteSettlementRecord = async () => {
+    if (hasPendingSettlement(session)) {
+      window.alert(
+        language === "ko"
+          ? DELETE_PENDING_SETTLEMENT_BLOCKED
+          : "This settlement is still in progress and cannot be deleted. Finish the unresolved payments first.",
+      );
+      return;
+    }
     const confirmation =
       language === "ko"
         ? DELETE_SETTLEMENT_RECORD_CONFIRMATION
-        : "Delete this settlement record from this device?";
+        : "Delete the completed settlement record stored on this device? Completed Lightning payments will not be cancelled.";
     if (window.confirm(confirmation)) await resetSession();
   };
 
