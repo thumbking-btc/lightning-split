@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { formatUsdCents, localeFor, type Language } from "./preferences";
 import {
@@ -143,7 +143,13 @@ function SettlementHistoryDetail({
   readonly onReturnToSettlement: () => void;
   readonly onDelete: (id: string) => Promise<boolean>;
 }) {
-  const [nowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
   const deleteRecord = async () => {
     if (active) return;
     const confirmed = window.confirm(
