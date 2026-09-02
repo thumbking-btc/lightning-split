@@ -152,7 +152,10 @@ describe("settlement history lifecycle", () => {
 
   it("continues tracking a replaced invoice after the completed settlement is archived", async () => {
     const session = completedSession("late-replaced");
-    const retiredInvoice = invoice("2", `v2.${"c".repeat(16)}.${"d".repeat(32)}`);
+    const retiredInvoice = invoice(
+      "2",
+      `v2.${"c".repeat(16)}.${"d".repeat(32)}`,
+    );
     await archiveCompletedSettlement({
       ...session,
       invoiceHistory: [
