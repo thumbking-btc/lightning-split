@@ -18,8 +18,27 @@ export interface InvoiceShareInput {
 export type InvoiceShareResult =
   "sharedWithQr" | "sharedText" | "copied" | "cancelled" | "failed";
 
+const MAX_QR_FILE_CACHE_ENTRIES = 24;
 const qrFileCache = new Map<string, File>();
 const qrFilePromises = new Map<string, Promise<File | undefined>>();
+
+function cachedQrFile(invoice: string): File | undefined {
+  const cached = qrFileCache.get(invoice);
+  if (!cached) return undefined;
+  qrFileCache.delete(invoice);
+  qrFileCache.set(invoice, cached);
+  return cached;
+}
+
+function cacheQrFile(invoice: string, file: File): void {
+  qrFileCache.delete(invoice);
+  qrFileCache.set(invoice, file);
+  while (qrFileCache.size > MAX_QR_FILE_CACHE_ENTRIES) {
+    const oldest = qrFileCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    qrFileCache.delete(oldest);
+  }
+}
 
 function formatInteger(value: string, language: Language): string {
   return new Intl.NumberFormat(localeFor(language)).format(
@@ -110,13 +129,13 @@ async function createQrFile(invoice: string): Promise<File | undefined> {
 export function prepareInvoiceShareFile(
   invoice: string,
 ): Promise<File | undefined> {
-  const cached = qrFileCache.get(invoice);
+  const cached = cachedQrFile(invoice);
   if (cached) return Promise.resolve(cached);
   const existing = qrFilePromises.get(invoice);
   if (existing) return existing;
   const promise = createQrFile(invoice)
     .then((file) => {
-      if (file) qrFileCache.set(invoice, file);
+      if (file) cacheQrFile(invoice, file);
       return file;
     })
     .catch(() => undefined)
@@ -126,7 +145,7 @@ export function prepareInvoiceShareFile(
 }
 
 function preparedInvoiceShareFile(invoice: string): File | undefined {
-  return qrFileCache.get(invoice);
+  return cachedQrFile(invoice);
 }
 
 function shareTitle(language: Language): string {
