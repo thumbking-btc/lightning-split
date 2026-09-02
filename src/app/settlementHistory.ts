@@ -61,7 +61,9 @@ interface SettlementHistoryTracker {
   readonly session: SettlementSession;
 }
 
-function serializeDatabaseOperation<T>(operation: () => Promise<T>): Promise<T> {
+function serializeDatabaseOperation<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
   const result = databaseOperationTail.then(operation);
   databaseOperationTail = result.then(
     () => undefined,
@@ -172,8 +174,12 @@ function trackingDeadlineMs(session: SettlementSession): number {
   );
 }
 
-async function trimHistoryRecords(database: Awaited<ReturnType<typeof openHistoryDatabase>>) {
-  const stored = (await database.getAll(RECORD_STORE)) as SettlementHistoryRecord[];
+async function trimHistoryRecords(
+  database: Awaited<ReturnType<typeof openHistoryDatabase>>,
+) {
+  const stored = (await database.getAll(
+    RECORD_STORE,
+  )) as SettlementHistoryRecord[];
   const sorted = stored
     .filter((record) => record?.version === 2 && typeof record.id === "string")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -189,7 +195,9 @@ export function archiveCompletedSettlement(
 ): Promise<SettlementHistoryRecord> {
   if (!isSettlementComplete(session)) {
     return Promise.reject(
-      new Error("정산이 모두 완료되기 전에는 과거 기록으로 종료할 수 없습니다."),
+      new Error(
+        "정산이 모두 완료되기 전에는 과거 기록으로 종료할 수 없습니다.",
+      ),
     );
   }
   const record = createSettlementHistorySnapshot(session, archivedAt);
@@ -214,9 +222,13 @@ export function archiveCompletedSettlement(
 export function listSettlementHistory(): Promise<SettlementHistoryRecord[]> {
   return serializeDatabaseOperation(async () => {
     const database = await openHistoryDatabase();
-    const stored = (await database.getAll(RECORD_STORE)) as SettlementHistoryRecord[];
+    const stored = (await database.getAll(
+      RECORD_STORE,
+    )) as SettlementHistoryRecord[];
     return stored
-      .filter((record) => record?.version === 2 && typeof record.id === "string")
+      .filter(
+        (record) => record?.version === 2 && typeof record.id === "string",
+      )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   });
 }
@@ -273,7 +285,9 @@ export function reconcileSettlementHistory(
 ): Promise<SettlementHistoryRecord[]> {
   return serializeDatabaseOperation(async () => {
     const database = await openHistoryDatabase();
-    const trackers = (await database.getAll(TRACKER_STORE)) as SettlementHistoryTracker[];
+    const trackers = (await database.getAll(
+      TRACKER_STORE,
+    )) as SettlementHistoryTracker[];
     for (const tracker of trackers) {
       if (!tracker?.session || typeof tracker.id !== "string") continue;
       if (trackingDeadlineMs(tracker.session) <= nowMs) {
@@ -284,12 +298,19 @@ export function reconcileSettlementHistory(
       await database.put(TRACKER_STORE, reconciled);
       await database.put(
         RECORD_STORE,
-        createSettlementHistorySnapshot(reconciled.session, reconciled.archivedAt),
+        createSettlementHistorySnapshot(
+          reconciled.session,
+          reconciled.archivedAt,
+        ),
       );
     }
-    const records = (await database.getAll(RECORD_STORE)) as SettlementHistoryRecord[];
+    const records = (await database.getAll(
+      RECORD_STORE,
+    )) as SettlementHistoryRecord[];
     return records
-      .filter((record) => record?.version === 2 && typeof record.id === "string")
+      .filter(
+        (record) => record?.version === 2 && typeof record.id === "string",
+      )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   });
 }

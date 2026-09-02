@@ -15,7 +15,9 @@ export function SettlementHistoryLaunch({
   return (
     <button className="history-nav-card" type="button" onClick={onOpen}>
       <span className="history-nav-copy">
-        <strong>{language === "ko" ? "정산 기록" : "Settlement history"}</strong>
+        <strong>
+          {language === "ko" ? "정산 기록" : "Settlement history"}
+        </strong>
         <small>
           {hasActiveSettlement
             ? language === "ko"

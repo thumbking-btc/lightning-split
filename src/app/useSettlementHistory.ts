@@ -26,7 +26,10 @@ export function useSettlementHistory() {
   }, []);
 
   const reconcile = useCallback(async () => {
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    if (
+      typeof document !== "undefined" &&
+      document.visibilityState !== "visible"
+    ) {
       return;
     }
     try {
@@ -53,7 +56,10 @@ export function useSettlementHistory() {
 
   useEffect(() => {
     void refresh().then(() => reconcile());
-    const timer = window.setInterval(() => void reconcile(), RECONCILIATION_INTERVAL_MS);
+    const timer = window.setInterval(
+      () => void reconcile(),
+      RECONCILIATION_INTERVAL_MS,
+    );
     const visibility = () => {
       if (document.visibilityState === "visible") void reconcile();
     };

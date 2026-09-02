@@ -11,7 +11,9 @@ import type { SettlementSession } from "./types";
 import "./SettlementHistory.css";
 
 function formatInteger(value: string, language: Language): string {
-  return new Intl.NumberFormat(localeFor(language)).format(Number(BigInt(value)));
+  return new Intl.NumberFormat(localeFor(language)).format(
+    Number(BigInt(value)),
+  );
 }
 
 function formatRecordAmount(
@@ -27,7 +29,10 @@ function formatRecordAmount(
   return `${formatInteger(record.totalAmount, language)} sats`;
 }
 
-function formatSlotAmount(slot: SettlementHistorySlot, language: Language): string {
+function formatSlotAmount(
+  slot: SettlementHistorySlot,
+  language: Language,
+): string {
   if (slot.krwShare) {
     return `${formatInteger(slot.krwShare, language)}${language === "ko" ? "원" : " KRW"} · ${formatInteger(slot.targetSats, language)} sats`;
   }
@@ -169,12 +174,17 @@ function SettlementHistoryDetail({
                 ? "정산 기록"
                 : "SETTLEMENT HISTORY"}
           </span>
-          <h1>{record.overallNote || (language === "ko" ? "정산 상세" : "Settlement details")}</h1>
+          <h1>
+            {record.overallNote ||
+              (language === "ko" ? "정산 상세" : "Settlement details")}
+          </h1>
         </div>
       </header>
 
       <section className="history-detail-summary">
-        <span>{new Date(record.createdAt).toLocaleString(localeFor(language))}</span>
+        <span>
+          {new Date(record.createdAt).toLocaleString(localeFor(language))}
+        </span>
         <strong>{formatRecordAmount(record, language)}</strong>
         <p>
           {language === "ko"
@@ -205,7 +215,9 @@ function SettlementHistoryDetail({
                 <span>{formatSlotAmount(slot, language)}</span>
                 {slot.completedAt && (
                   <small>
-                    {new Date(slot.completedAt).toLocaleString(localeFor(language))}
+                    {new Date(slot.completedAt).toLocaleString(
+                      localeFor(language),
+                    )}
                   </small>
                 )}
               </div>
@@ -231,7 +243,9 @@ function SettlementHistoryDetail({
             type="button"
             onClick={onReturnToSettlement}
           >
-            {language === "ko" ? "정산 화면으로 돌아가기" : "Return to settlement"}
+            {language === "ko"
+              ? "정산 화면으로 돌아가기"
+              : "Return to settlement"}
           </button>
         </>
       ) : (
@@ -339,7 +353,12 @@ export function SettlementHistoryScreen({
             onClick={() => setSelectedId(activeRecord.id)}
           >
             <div>
-              <span>{activeRecord.overallNote || (language === "ko" ? `${activeRecord.totalPeople}명 정산` : `${activeRecord.totalPeople} people`)}</span>
+              <span>
+                {activeRecord.overallNote ||
+                  (language === "ko"
+                    ? `${activeRecord.totalPeople}명 정산`
+                    : `${activeRecord.totalPeople} people`)}
+              </span>
               <strong>{formatRecordAmount(activeRecord, language)}</strong>
               <small>{shortDate(activeRecord.createdAt, language)}</small>
             </div>

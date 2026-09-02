@@ -104,11 +104,7 @@ describe("settlement history", () => {
   });
 
   it("does not archive a settlement while any participant is unfinished", async () => {
-    const pending = session(
-      "pending",
-      "2030-08-31T12:00:00.000Z",
-      "pending",
-    );
+    const pending = session("pending", "2030-08-31T12:00:00.000Z", "pending");
     expect(isSettlementComplete(pending)).toBe(false);
     await expect(archiveCompletedSettlement(pending)).rejects.toThrow(
       "정산이 모두 완료되기 전에는",

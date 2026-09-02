@@ -5,7 +5,11 @@ import {
   prepareInvoiceShareFile,
   shareBareInvoicePaymentRequest,
 } from "./invoiceShare";
-import { initialLanguage, subscribeLanguage, type Language } from "./preferences";
+import {
+  initialLanguage,
+  subscribeLanguage,
+  type Language,
+} from "./preferences";
 import { buildQrPayload } from "./qr";
 
 const MAX_QR_CACHE_ENTRIES = 24;
@@ -85,7 +89,11 @@ export function QrCode({ invoice }: { readonly invoice: string }) {
       })
       .catch(() => {
         if (active)
-          setError(language === "ko" ? "QR을 만들지 못했습니다." : "Could not create QR.");
+          setError(
+            language === "ko"
+              ? "QR을 만들지 못했습니다."
+              : "Could not create QR.",
+          );
       });
     return () => {
       active = false;
@@ -112,12 +120,14 @@ export function QrCode({ invoice }: { readonly invoice: string }) {
         className="secondary-button full qr-share-button"
         type="button"
         onClick={() =>
-          void shareBareInvoicePaymentRequest(invoice, language).then((result) =>
-            setFeedback(shareFeedback(result, language)),
+          void shareBareInvoicePaymentRequest(invoice, language).then(
+            (result) => setFeedback(shareFeedback(result, language)),
           )
         }
       >
-        {language === "ko" ? "QR · 결제 요청 공유" : "Share QR · payment request"}
+        {language === "ko"
+          ? "QR · 결제 요청 공유"
+          : "Share QR · payment request"}
       </button>
       <div className="copy-feedback" aria-live="polite">
         {feedback}

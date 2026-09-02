@@ -16,17 +16,15 @@ export interface InvoiceShareInput {
 }
 
 export type InvoiceShareResult =
-  | "sharedWithQr"
-  | "sharedText"
-  | "copied"
-  | "cancelled"
-  | "failed";
+  "sharedWithQr" | "sharedText" | "copied" | "cancelled" | "failed";
 
 const qrFileCache = new Map<string, File>();
 const qrFilePromises = new Map<string, Promise<File | undefined>>();
 
 function formatInteger(value: string, language: Language): string {
-  return new Intl.NumberFormat(localeFor(language)).format(Number(BigInt(value)));
+  return new Intl.NumberFormat(localeFor(language)).format(
+    Number(BigInt(value)),
+  );
 }
 
 function formatAmount(input: InvoiceShareInput, language: Language): string {
@@ -43,8 +41,12 @@ export function buildInvoiceShareText(input: InvoiceShareInput): string {
   const language = input.language ?? "ko";
   const recipient =
     input.displayName?.trim() ||
-    (language === "ko" ? `${input.slotNumber}번 결제` : `Payment ${input.slotNumber}`);
-  const expiresAt = new Date(input.expiresAt).toLocaleString(localeFor(language));
+    (language === "ko"
+      ? `${input.slotNumber}번 결제`
+      : `Payment ${input.slotNumber}`);
+  const expiresAt = new Date(input.expiresAt).toLocaleString(
+    localeFor(language),
+  );
   return language === "ko"
     ? [
         `Lightning Split · ${recipient}`,
@@ -70,14 +72,21 @@ export function buildBareInvoiceShareText(
 ): string {
   return language === "ko"
     ? ["Lightning Split 결제 요청", "", "Lightning invoice", invoice].join("\n")
-    : ["Lightning Split payment request", "", "Lightning invoice", invoice].join("\n");
+    : [
+        "Lightning Split payment request",
+        "",
+        "Lightning invoice",
+        invoice,
+      ].join("\n");
 }
 
 function isUserCancellation(cause: unknown): boolean {
   return cause instanceof DOMException && cause.name === "AbortError";
 }
 
-async function canvasToPngFile(canvas: HTMLCanvasElement): Promise<File | undefined> {
+async function canvasToPngFile(
+  canvas: HTMLCanvasElement,
+): Promise<File | undefined> {
   if (typeof File === "undefined") return undefined;
   const blob = await new Promise<Blob | null>((resolve) =>
     canvas.toBlob(resolve, "image/png"),
@@ -98,7 +107,9 @@ async function createQrFile(invoice: string): Promise<File | undefined> {
   return await canvasToPngFile(canvas);
 }
 
-export function prepareInvoiceShareFile(invoice: string): Promise<File | undefined> {
+export function prepareInvoiceShareFile(
+  invoice: string,
+): Promise<File | undefined> {
   const cached = qrFileCache.get(invoice);
   if (cached) return Promise.resolve(cached);
   const existing = qrFilePromises.get(invoice);
@@ -128,7 +139,10 @@ async function shareText(
   text: string,
   language: Language,
 ): Promise<InvoiceShareResult | undefined> {
-  if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
+  if (
+    typeof navigator === "undefined" ||
+    typeof navigator.share !== "function"
+  ) {
     return undefined;
   }
   try {
@@ -145,7 +159,10 @@ async function sharePreparedInvoice(
   text: string,
   language: Language,
 ): Promise<InvoiceShareResult> {
-  if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function"
+  ) {
     const file = preparedInvoiceShareFile(invoice);
     if (file) {
       try {

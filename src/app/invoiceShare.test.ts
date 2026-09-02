@@ -80,7 +80,9 @@ describe("invoice share fallback", () => {
       shareBareInvoicePaymentRequest("lnbc1textonly", "ko"),
     ).resolves.toBe("sharedText");
     expect(share).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("lnbc1textonly") }),
+      expect.objectContaining({
+        text: expect.stringContaining("lnbc1textonly"),
+      }),
     );
   });
 
@@ -104,7 +106,9 @@ describe("invoice share fallback", () => {
   });
 
   it("treats AbortError as user cancellation instead of copying", async () => {
-    const share = vi.fn().mockRejectedValue(new DOMException("cancel", "AbortError"));
+    const share = vi
+      .fn()
+      .mockRejectedValue(new DOMException("cancel", "AbortError"));
     Object.defineProperty(navigator, "share", {
       configurable: true,
       value: share,
