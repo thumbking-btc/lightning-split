@@ -57,7 +57,9 @@ describe("invoice share transport", () => {
   it("falls back from QR file sharing to native text sharing", async () => {
     const nativeShare = vi
       .fn<(data: ShareData) => Promise<void>>()
-      .mockRejectedValueOnce(Object.assign(new Error("blocked"), { name: "NotAllowedError" }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("blocked"), { name: "NotAllowedError" }),
+      )
       .mockResolvedValueOnce(undefined);
     const result = await shareInvoicePaymentRequest(input, {
       nativeShare,

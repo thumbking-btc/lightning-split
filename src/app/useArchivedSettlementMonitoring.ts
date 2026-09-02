@@ -32,7 +32,11 @@ async function checkTargets(
   targets: readonly LateSettlementTrackingTarget[],
 ): Promise<boolean> {
   let changed = false;
-  for (let index = 0; index < targets.length; index += ARCHIVED_CHECK_CONCURRENCY) {
+  for (
+    let index = 0;
+    index < targets.length;
+    index += ARCHIVED_CHECK_CONCURRENCY
+  ) {
     const batch = targets.slice(index, index + ARCHIVED_CHECK_CONCURRENCY);
     const results = await Promise.all(batch.map(checkTarget));
     changed = results.some(Boolean) || changed;

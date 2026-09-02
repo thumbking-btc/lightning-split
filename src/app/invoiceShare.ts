@@ -1,11 +1,7 @@
 import QRCode from "qrcode";
 
 import { copyTextToClipboard } from "./clipboard";
-import {
-  formatUsdCents,
-  localeFor,
-  type Language,
-} from "./preferences";
+import { formatUsdCents, localeFor, type Language } from "./preferences";
 import { buildQrPayload } from "./qr";
 
 export interface InvoiceShareInput {
@@ -20,11 +16,7 @@ export interface InvoiceShareInput {
 }
 
 export type InvoiceShareResult =
-  | "shared-file"
-  | "shared-text"
-  | "copied"
-  | "cancelled"
-  | "failed";
+  "shared-file" | "shared-text" | "copied" | "cancelled" | "failed";
 
 interface InvoiceShareDependencies {
   readonly nativeShare?: (data: ShareData) => Promise<void>;
@@ -34,7 +26,9 @@ interface InvoiceShareDependencies {
 }
 
 function formatInteger(value: string, language: Language): string {
-  return new Intl.NumberFormat(localeFor(language)).format(Number(BigInt(value)));
+  return new Intl.NumberFormat(localeFor(language)).format(
+    Number(BigInt(value)),
+  );
 }
 
 function formatAmount(input: InvoiceShareInput, language: Language): string {
@@ -54,7 +48,9 @@ export function buildInvoiceShareText(input: InvoiceShareInput): string {
     (language === "ko"
       ? `${input.slotNumber}번 결제`
       : `Payment #${input.slotNumber}`);
-  const expiresAt = new Date(input.expiresAt).toLocaleString(localeFor(language));
+  const expiresAt = new Date(input.expiresAt).toLocaleString(
+    localeFor(language),
+  );
   return language === "ko"
     ? [
         `Lightning Split · ${recipient}`,

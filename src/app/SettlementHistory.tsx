@@ -6,11 +6,7 @@ import {
   type SettlementHistoryRecord,
   type SettlementHistorySlot,
 } from "./settlementHistory";
-import {
-  formatUsdCents,
-  localeFor,
-  type Language,
-} from "./preferences";
+import { formatUsdCents, localeFor, type Language } from "./preferences";
 import type { SettlementSession } from "./types";
 import "./SettlementHistory.css";
 
@@ -27,7 +23,8 @@ function copy(language: Language) {
         storage:
           "정산 중인 결제는 완료될 때까지 이 기기에서 계속 추적합니다. 완료 기록에는 Lightning invoice 원문과 결제 확인 token을 장기 보관하지 않습니다.",
         emptyTitle: "아직 저장된 완료 정산이 없습니다.",
-        emptyHelp: "정산이 모두 완료된 뒤 새 정산을 시작하면 이곳에 보관됩니다.",
+        emptyHelp:
+          "정산이 모두 완료된 뒤 새 정산을 시작하면 이곳에 보관됩니다.",
         detail: "정산 상세",
         participants: "참여자별 상태",
         settlementDetails: "정산 내역",
@@ -88,7 +85,9 @@ function copy(language: Language) {
 }
 
 function formatInteger(value: string, language: Language): string {
-  return new Intl.NumberFormat(localeFor(language)).format(Number(BigInt(value)));
+  return new Intl.NumberFormat(localeFor(language)).format(
+    Number(BigInt(value)),
+  );
 }
 
 function formatAmount(
@@ -103,7 +102,10 @@ function formatAmount(
 }
 
 function formatSlotAmount(
-  slot: Pick<SettlementHistorySlot, "krwShare" | "usdCentsShare" | "targetSats">,
+  slot: Pick<
+    SettlementHistorySlot,
+    "krwShare" | "usdCentsShare" | "targetSats"
+  >,
   language: Language,
 ): string {
   if (slot.krwShare)
@@ -124,7 +126,8 @@ function recordStatus(
   const c = copy(language);
   const completed = completedCount(record);
   if (completed === record.invoiceCount) return c.completed;
-  if (completed > 0) return `${completed}/${record.invoiceCount} ${c.completed}`;
+  if (completed > 0)
+    return `${completed}/${record.invoiceCount} ${c.completed}`;
   return c.incomplete;
 }
 
@@ -186,7 +189,9 @@ function SettlementHistoryDetail({
         <span>
           {new Date(record.createdAt).toLocaleString(localeFor(language))}
         </span>
-        <strong>{formatAmount(record.inputMode, record.totalAmount, language)}</strong>
+        <strong>
+          {formatAmount(record.inputMode, record.totalAmount, language)}
+        </strong>
         <p>
           {language === "ko"
             ? `${c.total} ${record.totalPeople}${c.people} · ${c.requests} ${record.invoiceCount}명 · ${recordStatus(record, language)}`
@@ -263,7 +268,9 @@ function ActiveSettlementCard({
       <button className="history-active-card" type="button" onClick={onOpen}>
         <div>
           <span>{session.overallNote || c.active}</span>
-          <strong>{formatAmount(session.inputMode, session.totalAmount, language)}</strong>
+          <strong>
+            {formatAmount(session.inputMode, session.totalAmount, language)}
+          </strong>
           <small>
             {complete
               ? c.activeComplete
@@ -373,7 +380,11 @@ export function SettlementHistoryScreen({
                             : `${record.totalPeople}-person settlement`)}
                       </span>
                       <strong>
-                        {formatAmount(record.inputMode, record.totalAmount, language)}
+                        {formatAmount(
+                          record.inputMode,
+                          record.totalAmount,
+                          language,
+                        )}
                       </strong>
                       <small>{shortDate(record.createdAt, language)}</small>
                     </div>

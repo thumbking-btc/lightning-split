@@ -309,10 +309,7 @@ function createTrackingRecord(
 
   for (const slot of session.slots) {
     const invoice = slot.invoice;
-    if (
-      slot.status !== "manuallyConfirmed" ||
-      !invoice?.verificationToken
-    ) {
+    if (slot.status !== "manuallyConfirmed" || !invoice?.verificationToken) {
       continue;
     }
     const deadline = Date.parse(trackingExpiresAt(invoice.expiresAt));
@@ -482,7 +479,11 @@ export function applyLateSettlementTrackingResponse(
       await transaction.done;
       return false;
     }
-    if (!rawTracker.attempts.some((attempt) => sameTrackingAttempt(attempt, target))) {
+    if (
+      !rawTracker.attempts.some((attempt) =>
+        sameTrackingAttempt(attempt, target),
+      )
+    ) {
       await transaction.done;
       return false;
     }
