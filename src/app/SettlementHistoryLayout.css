@@ -1,0 +1,148 @@
+:root {
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+}
+
+/*
+ * Top-level screens use one vertical rhythm instead of relying on unrelated
+ * component margins. This prevents newly inserted cards or navigation rows
+ * from visually touching their neighbours.
+ */
+.layout-stack {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+}
+
+.layout-stack > * {
+  min-width: 0;
+}
+
+.layout-stack > .market-summary {
+  margin-bottom: 0;
+}
+
+.layout-stack > .preview-card,
+.layout-stack > .primary-button,
+.layout-stack > .global-error,
+.layout-stack > .global-warning,
+.layout-stack > .carousel-controls,
+.layout-stack > .danger-text-button {
+  margin-top: 0;
+}
+
+.layout-stack > .invoice-carousel {
+  margin-top: 0;
+}
+
+.layout-stack > .privacy-note,
+.layout-stack > .provider-comment-status,
+.layout-stack > .swipe-hint {
+  margin-block: 0;
+}
+
+.history-launch {
+  display: flex;
+  width: 100%;
+  min-height: 4.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1.05rem;
+  color: var(--ink);
+  background: var(--card);
+  box-shadow: 0 8px 24px rgb(49 42 28 / 6%);
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-launch:focus-visible {
+  outline: 3px solid rgb(242 184 75 / 38%);
+  outline-offset: 2px;
+}
+
+.history-launch-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.history-launch-copy strong {
+  font-size: 0.96rem;
+}
+
+.history-launch-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-launch-meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.history-launch-count {
+  min-width: 1.75rem;
+  padding: 0.28rem 0.48rem;
+  border-radius: 99px;
+  color: #5f5b53;
+  background: #eee9df;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.history-launch-arrow {
+  color: #7d641f;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.settlement-complete-note {
+  padding: 0.9rem;
+  border: 1px solid #b9dccd;
+  border-radius: 0.9rem;
+  color: #0f6749;
+  background: #e8f6ef;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.qr-share-block {
+  display: grid;
+  width: 100%;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
+.qr-share-button {
+  margin-top: var(--space-1);
+}
+
+@media (max-width: 390px) {
+  .layout-stack {
+    gap: var(--space-3);
+  }
+
+  .history-launch {
+    min-height: 4.5rem;
+    padding: 0.82rem 0.9rem;
+  }
+
+  .history-launch-copy small {
+    font-size: 0.76rem;
+  }
+}

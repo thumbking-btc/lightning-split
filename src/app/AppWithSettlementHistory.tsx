@@ -1,24 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { UsdPriceSnapshotDto } from "./api/contracts";
-import type { PriceSnapshotDto } from "./api/serialization";
-import { ApiClientError, requestInvoiceBatch } from "./app/api";
-import { scrollCarouselToIndex } from "./app/carousel";
-import { copyTextToClipboard, readTextFromClipboard } from "./app/clipboard";
-import { uiCopy } from "./app/i18n";
-import { heroLine1For } from "./app/heroCopy";
+import {
+  AmountInput,
+  InvoiceCard,
+  MarketSummary,
+  SettlementHeader,
+  SettlementPreviewDetails,
+  SettlementRecordDeleteButton,
+} from "../App";
+import type { UsdPriceSnapshotDto } from "../api/contracts";
+import type { PriceSnapshotDto } from "../api/serialization";
+import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
+import type { InputMode } from "../domain/models";
+import { MAX_PEOPLE, MIN_PEOPLE } from "../domain/money";
+import { ApiClientError, requestInvoiceBatch } from "./api";
+import { scrollCarouselToIndex } from "./carousel";
+import { readTextFromClipboard } from "./clipboard";
+import { heroLine1For } from "./heroCopy";
+import { uiCopy } from "./i18n";
 import {
   isLightningInvoiceInput,
   LIGHTNING_INVOICE_INPUT_MESSAGE,
-} from "./app/lightningInput";
-import { parseParticipantNameCandidates } from "./app/nameCandidates";
+} from "./lightningInput";
+import { parseParticipantNameCandidates } from "./nameCandidates";
 import {
   clearActiveSession,
   loadActiveSession,
   recoverInterruptedSession,
   saveActiveSession,
   SessionPersistenceConflictError,
-} from "./app/persistence";
+} from "./persistence";
 import {
   formatUsdCents,
   initialCurrency,
@@ -26,18 +37,15 @@ import {
   localeFor,
   saveCurrency,
   saveLanguage,
-  sanitizeIntegerInput,
-  sanitizeUsdInput,
   type Language,
   usdInputToCents,
-} from "./app/preferences";
-import { QrCode } from "./app/QrCode";
+} from "./preferences";
 import {
   DELETE_PENDING_SETTLEMENT_BLOCKED,
   DELETE_SETTLEMENT_RECORD_CONFIRMATION,
   hasPendingSettlement,
   NEW_SETTLEMENT_PENDING_BLOCKED,
-} from "./app/sessionActions";
+} from "./sessionActions";
 import {
   annotateSettledSlot,
   applyBatchResponse,
@@ -50,33 +58,28 @@ import {
   firstActionableSlotIndex,
   getSettlementProgress,
   manuallyConfirmSlot,
-  markPendingInvoicesPersisted,
   markExpiredSlots,
+  markPendingInvoicesPersisted,
   nextActionableSlotIndex,
   pendingInvoicePersistenceIdentities,
   prepareSlotRetry,
   type DraftInput,
-  type SettlementPreview,
   undoManualConfirmation,
-} from "./app/session";
-import type { ClientSlot, SettlementSession } from "./app/types";
+} from "./session";
 import {
-  useMarketInformation,
-  type MarketInformationState,
-} from "./app/useMarketInformation";
-import {
-  useUsdMarketInformation,
-  type UsdMarketInformationState,
-} from "./app/useUsdMarketInformation";
-import { toUserMessage } from "./app/userMessage";
-import { useSettlementPolling } from "./app/useSettlementPolling";
-import { DEFAULT_LIGHTNING_POLICY } from "./config/policies";
-import type { InputMode } from "./domain/models";
-import { MAX_PEOPLE, MIN_PEOPLE } from "./domain/money";
-import { selectPaymentCapability } from "./lightning/settlement-capability";
-import "./styles.css";
+  archiveCompletedSettlement,
+  isSettlementComplete,
+} from "./settlementHistory";
+import { SettlementHistoryLaunch } from "./SettlementHistoryLaunch";
+import { SettlementHistoryScreen } from "./SettlementHistory";
+import type { ClientSlot, SettlementSession } from "./types";
+import { useMarketInformation } from "./useMarketInformation";
+import { useSettlementHistory } from "./useSettlementHistory";
+import { useSettlementPolling } from "./useSettlementPolling";
+import { useUsdMarketInformation } from "./useUsdMarketInformation";
+import { toUserMessage } from "./userMessage";
 
-function formatInteger(value: bigint, language: Language = "ko"): string {
+function formatInteger(value: bigint, language: Language): string {
   return new Intl.NumberFormat(localeFor(language)).format(Number(value));
 }
 
@@ -104,99 +107,25 @@ function formatPriceTime(
     0,
     Math.floor((Date.now() - Date.parse(snapshot.retrievedAt)) / 1_000),
   );
-  if (language === "ko")
+  if (language === "ko") {
     return seconds < 60 ? "방금 전" : `${Math.floor(seconds / 60)}분 전`;
+  }
   return seconds < 60 ? "just now" : `${Math.floor(seconds / 60)} min ago`;
 }
 
-function formatPremium(basisPoints: string): string {
-  const value = BigInt(basisPoints);
-  const absolute = value < 0n ? -value : value;
-  const sign = value > 0n ? "+" : value < 0n ? "−" : "";
-  return `${sign}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, "0")}%`;
-}
-
-function formatAmountRange(
-  values: readonly bigint[],
-  unit: string,
+function displayMarketPrice(
+  inputMode: InputMode,
+  priceSnapshot: PriceSnapshotDto | undefined,
+  usdPriceSnapshot: UsdPriceSnapshotDto | undefined,
   language: Language,
-): string {
-  if (values.length === 0) return `0${unit}`;
-  const minimum = values.reduce((result, value) =>
-    value < result ? value : result,
-  );
-  const maximum = values.reduce((result, value) =>
-    value > result ? value : result,
-  );
-  return minimum === maximum
-    ? `${formatInteger(minimum, language)}${unit}`
-    : `${formatInteger(minimum, language)}~${formatInteger(maximum, language)}${unit}`;
-}
-
-function formatUsdRange(values: readonly bigint[], language: Language): string {
-  if (values.length === 0) return formatUsdCents(0n, language);
-  const minimum = values.reduce((result, value) =>
-    value < result ? value : result,
-  );
-  const maximum = values.reduce((result, value) =>
-    value > result ? value : result,
-  );
-  return minimum === maximum
-    ? formatUsdCents(minimum, language)
-    : `${formatUsdCents(minimum, language)}~${formatUsdCents(maximum, language)}`;
-}
-
-function formatRemainingTime(
-  expiresAt: string,
-  nowMs: number,
-  language: Language,
-): string {
-  const seconds = Math.max(
-    0,
-    Math.ceil((Date.parse(expiresAt) - nowMs) / 1_000),
-  );
-  if (language === "ko") {
-    if (seconds === 0) return "만료됨";
-    if (seconds < 60) return `${seconds}초 남음`;
-    const minutes = Math.ceil(seconds / 60);
-    if (minutes < 60) return `${minutes}분 남음`;
-    return `${Math.ceil(minutes / 60)}시간 남음`;
+): string | undefined {
+  if (inputMode === "krw" && priceSnapshot) {
+    return `${formatInteger(BigInt(priceSnapshot.priceKrw), language)}${language === "ko" ? "원" : " KRW"}`;
   }
-  if (seconds === 0) return "Expired";
-  if (seconds < 60) return `${seconds}s remaining`;
-  const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) return `${minutes}m remaining`;
-  return `${Math.ceil(minutes / 60)}h remaining`;
-}
-
-function slotStatus(
-  slot: ClientSlot,
-  language: Language,
-): { label: string; tone: string } {
-  const c = uiCopy(language);
-  if (slot.status === "generating")
-    return { label: c.generatingRequest, tone: "working" };
-  if (slot.status === "verifyingExpired")
-    return { label: c.finalCheck, tone: "working" };
-  if (slot.status === "settled")
-    return {
-      label: slot.settlementEvidence ? c.autoConfirmed : c.previousRecord,
-      tone: slot.settlementEvidence ? "done" : "manual",
-    };
-  if (slot.status === "manuallyConfirmed")
-    return { label: c.manualConfirmed, tone: "manual" };
-  if (slot.status === "legacyReviewRequired")
-    return { label: c.previousReview, tone: "manual" };
-  if (slot.status === "expired") return { label: c.expired, tone: "muted" };
-  if (slot.status === "failed")
-    return { label: c.generationFailed, tone: "error" };
-  if (slot.invoice?.awaitingPersistence === true)
-    return { label: c.savingRequest, tone: "working" };
-  if (slot.verificationDelayed && slot.invoice?.verificationToken)
-    return { label: c.delayedManual, tone: "working" };
-  if (slot.invoice?.verificationToken)
-    return { label: c.waitingAuto, tone: "waiting" };
-  return { label: c.waitingManual, tone: "manual" };
+  if (inputMode === "usd" && usdPriceSnapshot) {
+    return formatUsdCents(BigInt(usdPriceSnapshot.priceUsdCents), language);
+  }
+  return undefined;
 }
 
 function LanguageSwitch({
@@ -229,744 +158,7 @@ function LanguageSwitch({
   );
 }
 
-function ExpiryCountdown({
-  expiresAt,
-  language = "ko",
-}: {
-  readonly expiresAt: string;
-  readonly language?: Language;
-}) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  return (
-    <p className="expiry" aria-live="polite">
-      {formatRemainingTime(expiresAt, nowMs, language)} ·{" "}
-      {new Date(expiresAt).toLocaleString(localeFor(language))}
-      {language === "ko" ? "까지" : ""}
-    </p>
-  );
-}
-
-export function InvoiceCard({
-  slot,
-  candidates,
-  retrying,
-  renderQr = true,
-  language = "ko",
-  onAnnotate,
-  onRetry,
-  onManualConfirm,
-  onUndoManualConfirm,
-}: {
-  readonly slot: ClientSlot;
-  readonly candidates: readonly string[];
-  readonly retrying: boolean;
-  readonly renderQr?: boolean;
-  readonly language?: Language;
-  readonly onAnnotate: (slotNumber: number, displayName: string) => void;
-  readonly onRetry: (slotNumber: number) => void;
-  readonly onManualConfirm: (slotNumber: number) => void;
-  readonly onUndoManualConfirm: (slotNumber: number) => void;
-}) {
-  const c = uiCopy(language);
-  const status = slotStatus(slot, language);
-  const statusLines = status.label.split(" · ");
-  const [copyFeedback, setCopyFeedback] = useState<string>();
-  const paymentCapability = slot.invoice
-    ? selectPaymentCapability({
-        automaticSettlement: slot.invoice.verificationToken !== undefined,
-        payerMemo: slot.invoice.payerMemo ?? "none",
-        payeeMemo: slot.invoice.payeeMemo ?? "none",
-      })
-    : undefined;
-
-  const copyInvoice = async () => {
-    if (!slot.invoice) return;
-    const copied = await copyTextToClipboard(slot.invoice.bolt11);
-    setCopyFeedback(copied ? c.copied : c.copyFailed);
-  };
-
-  const primaryAmount = slot.krwShare
-    ? `${formatInteger(BigInt(slot.krwShare), language)}${language === "ko" ? "원" : " KRW"}`
-    : slot.usdCentsShare
-      ? formatUsdCents(BigInt(slot.usdCentsShare), language)
-      : `${formatInteger(BigInt(slot.targetSats), language)} sats`;
-  const hasFiatShare = Boolean(slot.krwShare || slot.usdCentsShare);
-
-  return (
-    <article
-      className="invoice-card"
-      data-payment-capability={paymentCapability?.id}
-      aria-label={
-        language === "ko"
-          ? `${slot.slotNumber}번 결제, ${status.label}`
-          : `Payment ${slot.slotNumber}, ${status.label}`
-      }
-    >
-      <div className="card-head">
-        <div>
-          <span className="slot-number">
-            {language === "ko" ? `${slot.slotNumber}번` : `#${slot.slotNumber}`}
-          </span>
-          <strong>{primaryAmount}</strong>
-        </div>
-        <span
-          className={`status-pill ${status.tone}`}
-          role="status"
-          aria-live="polite"
-        >
-          {statusLines.map((line, index) => (
-            <span className="status-line" key={`${index}-${line}`}>
-              {line}
-              {index === 0 && statusLines.length > 1 ? " ·" : ""}
-            </span>
-          ))}
-        </span>
-      </div>
-      {hasFiatShare && (
-        <p className="sats-line">
-          {formatInteger(BigInt(slot.targetSats), language)} sats
-        </p>
-      )}
-
-      <div className="annotation-panel participant-panel">
-        <label>
-          {c.participantForPayment} <span>{c.optional}</span>
-          <input
-            value={slot.annotation?.displayName ?? ""}
-            onChange={(event) =>
-              onAnnotate(slot.slotNumber, event.target.value)
-            }
-            placeholder={c.participantPlaceholderShort}
-          />
-        </label>
-        {candidates.length > 0 && (
-          <div
-            className="candidate-list"
-            aria-label={
-              language === "ko"
-                ? "참여자 이름 후보"
-                : "Participant name candidates"
-            }
-          >
-            {candidates.map((candidate) => (
-              <button
-                type="button"
-                key={candidate}
-                aria-pressed={slot.annotation?.displayName === candidate}
-                onClick={() => onAnnotate(slot.slotNumber, candidate)}
-              >
-                {candidate}
-              </button>
-            ))}
-          </div>
-        )}
-        <p>{c.participantLocalOnly}</p>
-      </div>
-
-      {slot.invoice &&
-        slot.status === "pending" &&
-        slot.invoice.awaitingPersistence !== true && (
-          <>
-            <div
-              className={`verification-panel ${
-                slot.verificationDelayed
-                  ? "delayed"
-                  : paymentCapability?.automaticSettlement
-                    ? "auto"
-                    : "manual"
-              }`}
-              role="status"
-            >
-              {slot.verificationDelayed ? (
-                <>
-                  <strong>{c.autoVerifyDelayed}</strong>
-                  <span>{c.autoVerifyDelayedHelp}</span>
-                </>
-              ) : paymentCapability?.automaticSettlement ? (
-                <>
-                  <strong>{c.autoVerifying}</strong>
-                  <span>{c.autoVerifyingHelp}</span>
-                </>
-              ) : (
-                <>
-                  <strong>{c.manualRequired}</strong>
-                  <span>{c.manualRequiredHelp}</span>
-                </>
-              )}
-            </div>
-            {paymentCapability &&
-              (paymentCapability.payerMemo !== "none" ||
-                paymentCapability.payeeMemo !== "none") && (
-                <p className="capability-summary">
-                  {[
-                    paymentCapability.payerMemo === "full"
-                      ? c.payerMemoIncluded
-                      : paymentCapability.payerMemo === "partial"
-                        ? c.payerMemoPartial
-                        : undefined,
-                    paymentCapability.payeeMemo === "full"
-                      ? c.payeeMemoForwarded
-                      : paymentCapability.payeeMemo === "partial"
-                        ? c.payeeMemoPartial
-                        : undefined,
-                  ]
-                    .filter((label) => label !== undefined)
-                    .join(" · ")}
-                </p>
-              )}
-            <div className="qr-shell">
-              {renderQr ? (
-                <QrCode
-                  invoice={slot.invoice.bolt11}
-                  shareInput={{
-                    slotNumber: slot.slotNumber,
-                    ...(slot.annotation?.displayName
-                      ? { displayName: slot.annotation.displayName }
-                      : {}),
-                    ...(slot.krwShare ? { krwShare: slot.krwShare } : {}),
-                    ...(slot.usdCentsShare
-                      ? { usdCentsShare: slot.usdCentsShare }
-                      : {}),
-                    targetSats: slot.targetSats,
-                    expiresAt: slot.invoice.expiresAt,
-                  }}
-                />
-              ) : (
-                <div className="qr-placeholder dormant" aria-hidden="true" />
-              )}
-            </div>
-            <button
-              className="secondary-button full"
-              type="button"
-              onClick={() => void copyInvoice()}
-            >
-              {c.copyPaymentRequest}
-            </button>
-            <div className="copy-feedback" aria-live="polite">
-              {copyFeedback}
-            </div>
-            {slot.status === "pending" && renderQr && (
-              <ExpiryCountdown
-                expiresAt={slot.invoice.expiresAt}
-                language={language}
-              />
-            )}
-            {slot.invoice.verificationToken && !slot.verificationDelayed && (
-              <button
-                className="text-button invoice-fallback-button"
-                type="button"
-                onClick={() => onManualConfirm(slot.slotNumber)}
-              >
-                {c.manualFinish}
-              </button>
-            )}
-          </>
-        )}
-
-      {slot.status === "generating" && (
-        <div className="loading-panel" aria-live="polite">
-          {c.safeGenerating}
-        </div>
-      )}
-      {slot.status === "pending" &&
-        slot.invoice?.awaitingPersistence === true && (
-          <div className="loading-panel" aria-live="polite">
-            {c.safeSaving}
-          </div>
-        )}
-      {slot.status === "verifyingExpired" && (
-        <div className="loading-panel" aria-live="polite">
-          <span>{c.finalVerifying}</span>
-          {slot.invoice && (
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => onManualConfirm(slot.slotNumber)}
-            >
-              {c.markPaid}
-            </button>
-          )}
-        </div>
-      )}
-      {slot.status === "failed" && (
-        <div className="error-panel" role="alert">
-          <strong>
-            {slot.failure?.code === "INVOICE_PERSISTENCE_FAILED"
-              ? c.invoiceSaveFailed
-              : c.invoiceCreateFailed}
-          </strong>
-          <span>
-            {slot.failure?.code === "INVOICE_PERSISTENCE_FAILED"
-              ? c.persistenceFailureHelp
-              : slot.failure?.code === "PAYER_DATA_REQUIRED"
-                ? c.payerDataRequiredHelp
-                : slot.failure?.code === "UNSUPPORTED_PAYMENT_FLOW"
-                  ? c.unsupportedFlowHelp
-                  : c.otherPaymentsPreserved}
-          </span>
-          {slot.failure?.retryable !== false && (
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={retrying}
-              onClick={() => onRetry(slot.slotNumber)}
-            >
-              {retrying ? c.retrying : c.retryThis}
-            </button>
-          )}
-        </div>
-      )}
-      {slot.status === "expired" && (
-        <div className="expired-panel">
-          <strong>{c.qrExpired}</strong>
-          <span>{c.qrExpiredHelp}</span>
-          {slot.invoice && (
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => onManualConfirm(slot.slotNumber)}
-            >
-              {c.alreadyReceived}
-            </button>
-          )}
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={retrying}
-            onClick={() => onRetry(slot.slotNumber)}
-          >
-            {retrying ? c.retrying : c.createNewRequest}
-          </button>
-        </div>
-      )}
-      {slot.status === "legacyReviewRequired" && (
-        <div className="manual-panel" role="status">
-          <span>{c.legacyReviewHelp}</span>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => onManualConfirm(slot.slotNumber)}
-          >
-            {c.confirmAndFinish}
-          </button>
-        </div>
-      )}
-      {slot.status === "pending" &&
-        slot.invoice &&
-        slot.invoice.awaitingPersistence !== true &&
-        (!slot.invoice.verificationToken || slot.verificationDelayed) && (
-          <div className="manual-panel">
-            <span>{c.confirmInWallet}</span>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => onManualConfirm(slot.slotNumber)}
-            >
-              {c.markPaid}
-            </button>
-          </div>
-        )}
-      {slot.status === "manuallyConfirmed" && (
-        <div className="manual-panel" role="status">
-          <span>{c.manuallyMarked}</span>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => onUndoManualConfirm(slot.slotNumber)}
-          >
-            {c.undoManual}
-          </button>
-        </div>
-      )}
-    </article>
-  );
-}
-
-function marketConnectionLabel(
-  connection:
-    | MarketInformationState["connection"]
-    | UsdMarketInformationState["connection"],
-  language: Language,
-): string {
-  const c = uiCopy(language);
-  if (connection === "live") return c.live;
-  if (connection === "recent") return c.recent;
-  if (connection === "stale") return c.stale;
-  if (connection === "unavailable") return c.unavailable;
-  return c.connecting;
-}
-
-export function MarketSummary({
-  market,
-  usdMarket,
-  currency = "krw",
-  language = "ko",
-}: {
-  readonly market: MarketInformationState;
-  readonly usdMarket?: UsdMarketInformationState;
-  readonly currency?: InputMode;
-  readonly language?: Language;
-}) {
-  const c = uiCopy(language);
-  if (currency === "sats") {
-    return (
-      <section
-        className="market-summary"
-        aria-label={
-          language === "ko"
-            ? "현재 비트코인 시장정보"
-            : "Current Bitcoin market information"
-        }
-      >
-        <div className="market-summary-head">
-          <span>{c.currentMarket}</span>
-          <span className="market-status recent">Bitcoin</span>
-        </div>
-        <div className="market-values single-market-value">
-          <div>
-            <span>1 BTC</span>
-            <strong>{formatInteger(100_000_000n, language)} sats</strong>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  const usingUsd = currency === "usd";
-  const information = usingUsd ? usdMarket?.information : market.information;
-  const connection = usingUsd
-    ? (usdMarket?.connection ?? "connecting")
-    : market.connection;
-  const error = usingUsd ? usdMarket?.error : market.error;
-
-  return (
-    <section
-      className="market-summary"
-      aria-label={
-        language === "ko"
-          ? "현재 비트코인 시장정보"
-          : "Current Bitcoin market information"
-      }
-    >
-      <div className="market-summary-head">
-        <span>{c.currentMarket}</span>
-        <span
-          className={`market-status ${connection}`}
-          role="status"
-          aria-live="polite"
-        >
-          {marketConnectionLabel(connection, language)}
-        </span>
-      </div>
-      <div className="market-values">
-        <div>
-          <span>{usingUsd ? "BTC/USD" : "BTC/KRW"}</span>
-          <strong>
-            {information
-              ? usingUsd
-                ? formatUsdCents(
-                    BigInt(
-                      usdMarket?.information?.snapshot.priceUsdCents ?? "0",
-                    ),
-                    language,
-                  )
-                : `${formatInteger(BigInt(market.information?.snapshot.priceKrw ?? "0"), language)}${language === "ko" ? "원" : " KRW"}`
-              : c.checking}
-          </strong>
-        </div>
-        <div>
-          <span>{usingUsd ? c.coinbasePremium : c.upbitPremium}</span>
-          <strong>
-            {information?.premium
-              ? formatPremium(information.premium.basisPoints)
-              : connection === "unavailable" || connection === "stale"
-                ? c.premiumUnavailable
-                : c.checking}
-          </strong>
-          <small>{c.premiumRefresh}</small>
-        </div>
-      </div>
-      <small>
-        {information
-          ? `${c.priceRecently} ${formatPriceTime(information.snapshot, language)}`
-          : error || c.checking}
-      </small>
-    </section>
-  );
-}
-
-export function SettlementHeader({
-  note,
-  language = "ko",
-  onNewSettlement,
-}: {
-  readonly note: string | undefined;
-  readonly language?: Language;
-  readonly onNewSettlement: () => void;
-}) {
-  const c = uiCopy(language);
-  return (
-    <header className="result-header">
-      <img
-        className="brand-mark"
-        src="/lightning-split.jpg"
-        alt="Lightning Split"
-      />
-      <div>
-        <span className="eyebrow">LIGHTNING SPLIT</span>
-        <h1>{note || c.settlementInProgress}</h1>
-        {note && <small>{c.settlementNote}</small>}
-      </div>
-      <button
-        className="text-button touch-target"
-        type="button"
-        onClick={onNewSettlement}
-      >
-        {c.newSettlement}
-      </button>
-    </header>
-  );
-}
-
-export function SettlementRecordDeleteButton({
-  language = "ko",
-  onDelete,
-}: {
-  readonly language?: Language;
-  readonly onDelete: () => void;
-}) {
-  const c = uiCopy(language);
-  return (
-    <button className="danger-text-button" type="button" onClick={onDelete}>
-      {c.deleteSettlement}
-    </button>
-  );
-}
-
-export function AmountInput({
-  inputMode,
-  totalAmount,
-  language = "ko",
-  onInputModeChange,
-  onTotalAmountChange,
-}: {
-  readonly inputMode: InputMode;
-  readonly totalAmount: string;
-  readonly language?: Language;
-  readonly onInputModeChange: (mode: InputMode) => void;
-  readonly onTotalAmountChange: (amount: string) => void;
-}) {
-  const c = uiCopy(language);
-  const sanitize =
-    inputMode === "usd" ? sanitizeUsdInput : sanitizeIntegerInput;
-  const unit =
-    inputMode === "krw"
-      ? language === "ko"
-        ? "원"
-        : "KRW"
-      : inputMode === "usd"
-        ? "USD"
-        : "sats";
-  return (
-    <>
-      <div className="field-head">
-        <label htmlFor="amount">{c.totalAmount}</label>
-        <div className="unit-switch" role="group" aria-label={c.amountUnit}>
-          <button
-            type="button"
-            className={inputMode === "krw" ? "active" : ""}
-            aria-pressed={inputMode === "krw"}
-            onClick={() => onInputModeChange("krw")}
-          >
-            {c.krw}
-          </button>
-          <button
-            type="button"
-            className={inputMode === "usd" ? "active" : ""}
-            aria-pressed={inputMode === "usd"}
-            onClick={() => onInputModeChange("usd")}
-          >
-            {c.usd}
-          </button>
-          <button
-            type="button"
-            className={inputMode === "sats" ? "active" : ""}
-            aria-pressed={inputMode === "sats"}
-            onClick={() => onInputModeChange("sats")}
-          >
-            {c.sats}
-          </button>
-        </div>
-      </div>
-      <div className="amount-input">
-        <input
-          id="amount"
-          aria-label={c.totalAmount}
-          inputMode={inputMode === "usd" ? "decimal" : "numeric"}
-          pattern={inputMode === "usd" ? "[0-9]*[.]?[0-9]*" : "[0-9]*"}
-          value={totalAmount}
-          placeholder={inputMode === "usd" ? "0.00" : "0"}
-          onChange={(event) =>
-            onTotalAmountChange(sanitize(event.target.value))
-          }
-        />
-        <span>{unit}</span>
-      </div>
-    </>
-  );
-}
-
-export function SettlementPreviewDetails({
-  inputMode,
-  totalAmount,
-  totalPeople,
-  preview,
-  priceSnapshotAt,
-  language = "ko",
-}: {
-  readonly inputMode: InputMode;
-  readonly totalAmount: string;
-  readonly totalPeople: number;
-  readonly preview: SettlementPreview;
-  readonly priceSnapshotAt?: string;
-  readonly language?: Language;
-}) {
-  const c = uiCopy(language);
-  const receivableSats = preview.targetSats.reduce(
-    (sum, amount) => sum + amount,
-    0n,
-  );
-  const totalDisplay =
-    inputMode === "usd"
-      ? formatUsdCents(BigInt(usdInputToCents(totalAmount) || "0"), language)
-      : `${totalAmount ? formatInteger(BigInt(totalAmount), language) : "0"}${
-          inputMode === "krw" ? (language === "ko" ? "원" : " KRW") : " sats"
-        }`;
-  return (
-    <div className="preview-details">
-      <div className="preview-grid">
-        <div>
-          <span>{c.totalAmount}</span>
-          <strong>{totalDisplay}</strong>
-        </div>
-        <div>
-          <span>{c.totalPeople}</span>
-          <strong>
-            {totalPeople}
-            {language === "ko" ? "명" : ""}
-          </strong>
-        </div>
-        <div>
-          <span>{c.receivingPeople}</span>
-          <strong>
-            {preview.invoiceCount}
-            {language === "ko" ? "명" : ""}
-          </strong>
-        </div>
-        {inputMode === "krw" ? (
-          <>
-            {preview.payerShareKrw !== null && (
-              <div>
-                <span>{c.payerFinalShare}</span>
-                <strong>
-                  {formatInteger(preview.payerShareKrw, language)}
-                  {language === "ko" ? "원" : " KRW"}
-                </strong>
-              </div>
-            )}
-            <div>
-              <span>
-                {language === "ko" ? "사람별 원화 몫" : c.fiatSharePerPerson}
-              </span>
-              <strong>
-                {formatAmountRange(
-                  preview.invoiceShares,
-                  language === "ko" ? "원" : " KRW",
-                  language,
-                )}
-              </strong>
-            </div>
-            <div>
-              <span>{c.paymentPerQr}</span>
-              <strong>
-                {formatAmountRange(preview.targetSats, " sats", language)}
-              </strong>
-            </div>
-          </>
-        ) : inputMode === "usd" ? (
-          <>
-            {preview.payerShareUsdCents != null && (
-              <div>
-                <span>{c.payerFinalShare}</span>
-                <strong>
-                  {formatUsdCents(preview.payerShareUsdCents, language)}
-                </strong>
-              </div>
-            )}
-            <div>
-              <span>{c.fiatSharePerPerson}</span>
-              <strong>{formatUsdRange(preview.invoiceShares, language)}</strong>
-            </div>
-            <div>
-              <span>{c.paymentPerQr}</span>
-              <strong>
-                {formatAmountRange(preview.targetSats, " sats", language)}
-              </strong>
-            </div>
-          </>
-        ) : (
-          <>
-            {preview.payerShareSats !== null && (
-              <div>
-                <span>{c.payerShare}</span>
-                <strong>
-                  {formatInteger(preview.payerShareSats, language)} sats
-                </strong>
-              </div>
-            )}
-            <div>
-              <span>{c.paymentPerPerson}</span>
-              <strong>
-                {formatAmountRange(preview.targetSats, " sats", language)}
-              </strong>
-            </div>
-            <div>
-              <span>{c.totalSatsToReceive}</span>
-              <strong>{formatInteger(receivableSats, language)} sats</strong>
-            </div>
-          </>
-        )}
-      </div>
-      {inputMode !== "sats" && priceSnapshotAt && (
-        <div className="preview-time-card">
-          <span>{c.priceCheckedAt}</span>
-          <strong>
-            {new Date(priceSnapshotAt).toLocaleString(localeFor(language))}
-          </strong>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function displayMarketPrice(
-  inputMode: InputMode,
-  priceSnapshot: PriceSnapshotDto | undefined,
-  usdPriceSnapshot: UsdPriceSnapshotDto | undefined,
-  language: Language,
-): string | undefined {
-  if (inputMode === "krw" && priceSnapshot)
-    return `${formatInteger(BigInt(priceSnapshot.priceKrw), language)}${language === "ko" ? "원" : " KRW"}`;
-  if (inputMode === "usd" && usdPriceSnapshot)
-    return formatUsdCents(BigInt(usdPriceSnapshot.priceUsdCents), language);
-  return undefined;
-}
-
-export function App() {
+export function AppWithSettlementHistory() {
   const [language, setLanguage] = useState<Language>(() => initialLanguage());
   const [inputMode, setInputMode] = useState<InputMode>(() =>
     initialCurrency(initialLanguage()),
@@ -978,6 +170,14 @@ export function App() {
   const [overallNote, setOverallNote] = useState("");
   const [candidateText, setCandidateText] = useState("");
   const [session, setSession] = useState<SettlementSession | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const {
+    records: historyRecords,
+    error: historyError,
+    refresh: refreshHistory,
+    deleteRecord: deleteHistoryRecord,
+  } = useSettlementHistory();
+
   const krwMarketEnabled = inputMode === "krw" || session?.inputMode === "krw";
   const usdMarketEnabled = inputMode === "usd" || session?.inputMode === "usd";
   const {
@@ -1082,10 +282,11 @@ export function App() {
     void saveActiveSession(session)
       .then(() => {
         setPersistenceError(undefined);
-        if (pendingPersistence.length > 0)
+        if (pendingPersistence.length > 0) {
           updateSession((current) =>
             markPendingInvoicesPersisted(current, pendingPersistence),
           );
+        }
       })
       .catch((cause: unknown) => {
         if (cause instanceof SessionPersistenceConflictError) {
@@ -1127,10 +328,11 @@ export function App() {
             ? "정산을 기기에 저장하지 못했습니다. 화면을 닫으면 복구되지 않을 수 있습니다."
             : "Could not save the settlement on this device. It may not be recoverable after closing the page.",
         );
-        if (pendingPersistence.length > 0)
+        if (pendingPersistence.length > 0) {
           updateSession((current) =>
             failPendingInvoicePersistence(current, pendingPersistence),
           );
+        }
       });
   }, [language, session, updateSession]);
 
@@ -1436,30 +638,43 @@ export function App() {
   };
 
   const newSettlement = async () => {
-    if (hasPendingSettlement(session)) {
+    if (session && hasPendingSettlement(session)) {
       window.alert(
         language === "ko"
           ? NEW_SETTLEMENT_PENDING_BLOCKED
-          : "This settlement is still in progress. Reissue any expired payment requests and finish every participant before starting a new settlement.",
+          : "This settlement is still in progress. Reissue expired invoices and finish every participant before starting a new settlement.",
       );
       return;
+    }
+    if (session) {
+      try {
+        await archiveCompletedSettlement(session);
+        await refreshHistory();
+      } catch {
+        setPersistenceError(
+          language === "ko"
+            ? "완료된 정산을 기록에 안전하게 보관하지 못해 새 정산으로 넘어가지 않았습니다."
+            : "The completed settlement could not be archived safely, so a new settlement was not started.",
+        );
+        return;
+      }
     }
     await resetSession();
   };
 
   const deleteSettlementRecord = async () => {
-    if (hasPendingSettlement(session)) {
+    if (session && hasPendingSettlement(session)) {
       window.alert(
         language === "ko"
           ? DELETE_PENDING_SETTLEMENT_BLOCKED
-          : "This settlement is still in progress and cannot be deleted. Finish the unresolved payments first.",
+          : "This settlement is still in progress and cannot be deleted. Resolve the remaining payments first.",
       );
       return;
     }
     const confirmation =
       language === "ko"
         ? DELETE_SETTLEMENT_RECORD_CONFIRMATION
-        : "Delete the completed settlement record stored on this device? Completed Lightning payments will not be cancelled.";
+        : "Delete this completed current settlement from this device? Completed Lightning payments are not affected.";
     if (window.confirm(confirmation)) await resetSession();
   };
 
@@ -1561,20 +776,37 @@ export function App() {
       if (
         sessionEpochRef.current !== operationEpoch ||
         activeSlotIndexRef.current !== activeSlotIndex
-      )
+      ) {
         return;
+      }
       activeSlotIndexRef.current = nextIndex;
       setActiveSlotIndex(nextIndex);
       scrollCarouselToIndex(carouselRef.current, nextIndex, "smooth");
     }, 0);
   }, [activeSlotIndex, session]);
 
-  if (restoring)
+  if (restoring) {
     return (
       <main className="app-shell loading-screen" aria-live="polite">
         {c.settlementLoading}
       </main>
     );
+  }
+
+  if (historyOpen) {
+    return (
+      <SettlementHistoryScreen
+        activeSession={session}
+        records={historyRecords}
+        error={historyError}
+        language={language}
+        onClose={() => setHistoryOpen(false)}
+        onDelete={deleteHistoryRecord}
+      />
+    );
+  }
+
+  const historyCount = historyRecords.length + (session ? 1 : 0);
 
   if (session) {
     const progress = getSettlementProgress(session);
@@ -1584,7 +816,7 @@ export function App() {
         ? 0
         : (progress.completedCount / progress.totalCount) * 100;
     return (
-      <main className="app-shell">
+      <main className="app-shell layout-stack">
         <LanguageSwitch language={language} onChange={changeLanguage} />
         <MarketSummary
           market={market}
@@ -1596,6 +828,12 @@ export function App() {
           note={session.overallNote}
           language={language}
           onNewSettlement={() => void newSettlement()}
+        />
+        <SettlementHistoryLaunch
+          count={historyCount}
+          hasActiveSettlement
+          language={language}
+          onOpen={() => setHistoryOpen(true)}
         />
         {session.overallNote &&
           session.providerCommentStatus === "forwarded" && (
@@ -1685,9 +923,21 @@ export function App() {
             </small>
           )}
         </section>
+        {isSettlementComplete(session) && (
+          <div className="settlement-complete-note" role="status">
+            {language === "ko"
+              ? "모든 참여자의 정산이 완료되었습니다. 새 정산을 시작하면 이 정산은 과거 기록으로 안전하게 보관됩니다."
+              : "Everyone is complete. Starting a new settlement will safely archive this settlement."}
+          </div>
+        )}
         {persistenceError && (
           <div className="global-warning" role="alert">
             {persistenceError}
+          </div>
+        )}
+        {historyError && (
+          <div className="global-warning" role="alert">
+            {historyError}
           </div>
         )}
         {error && (
@@ -1771,7 +1021,7 @@ export function App() {
     inputMode === "usd" ? usdMarket.error : market.error;
 
   return (
-    <main className="app-shell">
+    <main className="app-shell layout-stack">
       <LanguageSwitch language={language} onChange={changeLanguage} />
       <MarketSummary
         market={market}
@@ -1793,6 +1043,12 @@ export function App() {
         </h1>
         <p>{c.heroDescription}</p>
       </header>
+      <SettlementHistoryLaunch
+        count={historyCount}
+        hasActiveSettlement={false}
+        language={language}
+        onOpen={() => setHistoryOpen(true)}
+      />
       <section className="form-card">
         <AmountInput
           inputMode={inputMode}
@@ -1982,6 +1238,11 @@ export function App() {
       {persistenceError && (
         <div className="global-warning" role="alert">
           {persistenceError}
+        </div>
+      )}
+      {historyError && (
+        <div className="global-warning" role="alert">
+          {historyError}
         </div>
       )}
       {error && (
