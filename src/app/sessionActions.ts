@@ -15,7 +15,7 @@ export const DELETE_PENDING_SETTLEMENT_BLOCKED =
   "아직 정산되지 않은 항목이 있어 현재 정산을 삭제할 수 없습니다. 미정산 항목을 먼저 처리하십시오.";
 
 export const DELETE_SETTLEMENT_RECORD_CONFIRMATION =
-  "완료된 현재 정산을 이 기기에서 삭제하시겠습니까? 이미 완료된 Lightning 결제에는 영향을 주지 않습니다.";
+  "기기에 저장된 완료된 현재 정산 기록을 삭제합니다. 이미 완료된 Lightning 결제는 취소되지 않습니다. 삭제하시겠습니까?";
 
 export function hasPendingSettlement(
   session: {
