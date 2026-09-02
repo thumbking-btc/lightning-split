@@ -16,7 +16,11 @@ export interface InvoiceShareInput {
 }
 
 export type InvoiceShareResult =
-  "shared-file" | "shared-text" | "copied" | "cancelled" | "failed";
+  | "shared-file"
+  | "shared-text"
+  | "copied"
+  | "cancelled"
+  | "failed";
 
 interface InvoiceShareDependencies {
   readonly nativeShare?: (data: ShareData) => Promise<void>;
@@ -127,6 +131,17 @@ function browserShareDependencies(): InvoiceShareDependencies {
   };
 }
 
+function canShareFiles(
+  nativeCanShare: NonNullable<InvoiceShareDependencies["nativeCanShare"]>,
+  file: File,
+): boolean {
+  try {
+    return nativeCanShare({ files: [file] });
+  } catch {
+    return false;
+  }
+}
+
 export async function shareInvoicePaymentRequest(
   input: InvoiceShareInput,
   dependencies: InvoiceShareDependencies = browserShareDependencies(),
@@ -149,20 +164,16 @@ export async function shareInvoicePaymentRequest(
       file = undefined;
     }
 
-    if (file && dependencies.nativeCanShare) {
-      let canShareFile = false;
+    if (
+      file &&
+      dependencies.nativeCanShare &&
+      canShareFiles(dependencies.nativeCanShare, file)
+    ) {
       try {
-        canShareFile = dependencies.nativeCanShare({ files: [file] });
-      } catch {
-        canShareFile = false;
-      }
-      if (canShareFile) {
-        try {
-          await nativeShare({ title, text, files: [file] });
-          return "shared-file";
-        } catch (cause) {
-          if (isShareCancellation(cause)) return "cancelled";
-        }
+        await nativeShare({ title, text, files: [file] });
+        return "shared-file";
+      } catch (cause) {
+        if (isShareCancellation(cause)) return "cancelled";
       }
     }
 
