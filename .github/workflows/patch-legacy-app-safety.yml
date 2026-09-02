@@ -1,0 +1,123 @@
+name: Patch legacy app settlement safety
+
+on:
+  push:
+    branches:
+      - feature/settlement-history-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/settlement-history-v2
+      - name: Apply exact safety patch
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const path = "src/App.tsx";
+          let source = fs.readFileSync(path, "utf8");
+
+          const beforeImport = [
+            "import {",
+            "  DELETE_SETTLEMENT_RECORD_CONFIRMATION,",
+            "  hasPendingSettlement,",
+            "  NEW_SETTLEMENT_PENDING_CONFIRMATION,",
+            '} from "./app/sessionActions";',
+          ].join("\n");
+          const afterImport = [
+            "import {",
+            "  DELETE_PENDING_SETTLEMENT_BLOCKED,",
+            "  DELETE_SETTLEMENT_RECORD_CONFIRMATION,",
+            "  hasPendingSettlement,",
+            "  NEW_SETTLEMENT_PENDING_BLOCKED,",
+            '} from "./app/sessionActions";',
+          ].join("\n");
+
+          const beforeActions = [
+            "  const newSettlement = async () => {",
+            "    const confirmation =",
+            '      language === "ko"',
+            "        ? NEW_SETTLEMENT_PENDING_CONFIRMATION",
+            '        : "A payment is still pending. Start a new settlement anyway?";',
+            "    if (hasPendingSettlement(session) && !window.confirm(confirmation)) return;",
+            "    await resetSession();",
+            "  };",
+            "",
+            "  const deleteSettlementRecord = async () => {",
+            "    const confirmation =",
+            '      language === "ko"',
+            "        ? DELETE_SETTLEMENT_RECORD_CONFIRMATION",
+            '        : "Delete this settlement record from this device?";',
+            "    if (window.confirm(confirmation)) await resetSession();",
+            "  };",
+          ].join("\n");
+          const afterActions = [
+            "  const newSettlement = async () => {",
+            "    if (hasPendingSettlement(session)) {",
+            "      window.alert(",
+            '        language === "ko"',
+            "          ? NEW_SETTLEMENT_PENDING_BLOCKED",
+            '          : "This settlement is still in progress. Reissue any expired payment requests and finish every participant before starting a new settlement.",',
+            "      );",
+            "      return;",
+            "    }",
+            "    await resetSession();",
+            "  };",
+            "",
+            "  const deleteSettlementRecord = async () => {",
+            "    if (hasPendingSettlement(session)) {",
+            "      window.alert(",
+            '        language === "ko"',
+            "          ? DELETE_PENDING_SETTLEMENT_BLOCKED",
+            '          : "This settlement is still in progress and cannot be deleted. Finish the unresolved payments first.",',
+            "      );",
+            "      return;",
+            "    }",
+            "    const confirmation =",
+            '      language === "ko"',
+            "        ? DELETE_SETTLEMENT_RECORD_CONFIRMATION",
+            '        : "Delete the completed settlement record stored on this device? Completed Lightning payments will not be cancelled.";',
+            "    if (window.confirm(confirmation)) await resetSession();",
+            "  };",
+          ].join("\n");
+
+          for (const [before, after] of [
+            [beforeImport, afterImport],
+            [beforeActions, afterActions],
+          ]) {
+            const count = source.split(before).length - 1;
+            if (count !== 1) throw new Error(`Expected one match, found ${count}`);
+            source = source.replace(before, after);
+          }
+          fs.writeFileSync(path, source);
+          NODE
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Format patched file
+        run: npx prettier --write src/App.tsx
+      - name: Commit patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No patch required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.tsx
+          git commit -m "fix: block unfinished settlement exits in legacy app"
+          git push origin HEAD:feature/settlement-history-v2
