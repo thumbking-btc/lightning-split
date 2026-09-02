@@ -37,8 +37,6 @@ import {
   localeFor,
   saveCurrency,
   saveLanguage,
-  sanitizeIntegerInput,
-  sanitizeUsdInput,
   type Language,
   usdInputToCents,
 } from "./preferences";
@@ -66,7 +64,6 @@ import {
   pendingInvoicePersistenceIdentities,
   prepareSlotRetry,
   type DraftInput,
-  type SettlementPreview,
   undoManualConfirmation,
 } from "./session";
 import {
@@ -76,16 +73,10 @@ import {
 import { SettlementHistoryLaunch } from "./SettlementHistoryLaunch";
 import { SettlementHistoryScreen } from "./SettlementHistory";
 import type { ClientSlot, SettlementSession } from "./types";
-import {
-  useMarketInformation,
-  type MarketInformationState,
-} from "./useMarketInformation";
+import { useMarketInformation } from "./useMarketInformation";
 import { useSettlementHistory } from "./useSettlementHistory";
 import { useSettlementPolling } from "./useSettlementPolling";
-import {
-  useUsdMarketInformation,
-  type UsdMarketInformationState,
-} from "./useUsdMarketInformation";
+import { useUsdMarketInformation } from "./useUsdMarketInformation";
 import { toUserMessage } from "./userMessage";
 
 function formatInteger(value: bigint, language: Language): string {
@@ -166,24 +157,6 @@ function LanguageSwitch({
     </div>
   );
 }
-
-function marketConnectionLabel(
-  connection:
-    | MarketInformationState["connection"]
-    | UsdMarketInformationState["connection"],
-  language: Language,
-): string {
-  const c = uiCopy(language);
-  if (connection === "live") return c.live;
-  if (connection === "recent") return c.recent;
-  if (connection === "stale") return c.stale;
-  if (connection === "unavailable") return c.unavailable;
-  return c.connecting;
-}
-
-// Keep this reference so type checking continues to cover both market hooks even
-// though the visual market summary itself remains implemented in ../App.
-void marketConnectionLabel;
 
 export function AppWithSettlementHistory() {
   const [language, setLanguage] = useState<Language>(() => initialLanguage());

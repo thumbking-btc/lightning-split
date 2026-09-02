@@ -419,7 +419,21 @@ export function InvoiceCard({
               )}
             <div className="qr-shell">
               {renderQr ? (
-                <QrCode invoice={slot.invoice.bolt11} />
+                <QrCode
+                  invoice={slot.invoice.bolt11}
+                  shareInput={{
+                    slotNumber: slot.slotNumber,
+                    ...(slot.annotation?.displayName
+                      ? { displayName: slot.annotation.displayName }
+                      : {}),
+                    ...(slot.krwShare ? { krwShare: slot.krwShare } : {}),
+                    ...(slot.usdCentsShare
+                      ? { usdCentsShare: slot.usdCentsShare }
+                      : {}),
+                    targetSats: slot.targetSats,
+                    expiresAt: slot.invoice.expiresAt,
+                  }}
+                />
               ) : (
                 <div className="qr-placeholder dormant" aria-hidden="true" />
               )}
