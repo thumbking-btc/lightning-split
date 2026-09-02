@@ -16,9 +16,10 @@ import type { SettlementSession } from "./types";
 function session(
   id: string,
   createdAt: string,
-  status: "settled" | "pending" = "settled",
+  status: "settled" | "pending" | "manuallyConfirmed" = "settled",
 ): SettlementSession {
   const settled = status === "settled";
+  const manuallyConfirmed = status === "manuallyConfirmed";
   return {
     version: 2,
     id,
@@ -59,6 +60,9 @@ function session(
               },
             }
           : {}),
+        ...(manuallyConfirmed
+          ? { confirmedAt: "2030-08-31T12:05:00.000Z" }
+          : {}),
         annotation: {
           displayName: "민수",
           note: "기기 메모",
@@ -78,6 +82,22 @@ function session(
       },
     ],
   };
+}
+
+function trackerCount(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const opening = indexedDB.open("lightning-split-history", 2);
+    opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => {
+      const database = opening.result;
+      const transaction = database.transaction("trackers", "readonly");
+      const request = transaction.objectStore("trackers").count();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      transaction.oncomplete = () => database.close();
+      transaction.onerror = () => reject(transaction.error);
+    };
+  });
 }
 
 describe("settlement history", () => {
@@ -124,6 +144,27 @@ describe("settlement history", () => {
       "newer",
       "older",
     ]);
+  });
+
+  it("does not retain payment secrets after every invoice is network-confirmed", async () => {
+    await archiveCompletedSettlement(
+      session("network-settled", "2030-08-31T12:00:00.000Z"),
+    );
+    expect(await trackerCount()).toBe(0);
+  });
+
+  it("retains a temporary tracker only when a late network confirmation can still matter", async () => {
+    await archiveCompletedSettlement(
+      session(
+        "manual-settled",
+        "2030-08-31T12:00:00.000Z",
+        "manuallyConfirmed",
+      ),
+    );
+    expect(await trackerCount()).toBe(1);
+
+    await deleteSettlementHistoryRecord("manual-settled");
+    expect(await trackerCount()).toBe(0);
   });
 
   it("deletes the selected completed history record", async () => {
