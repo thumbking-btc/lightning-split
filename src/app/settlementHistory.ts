@@ -1,11 +1,11 @@
 import { openDB } from "idb";
 
 import { fetchSettlement } from "./api";
+import { duplicateSettledSlotNumbers } from "./session";
 import {
-  duplicateSettledSlotNumbers,
+  settlementPollingTargets,
   transitionAfterSettlementCheck,
-} from "./session";
-import { settlementPollingTargets } from "./polling";
+} from "./polling";
 import type { ClientSlot, SettlementSession } from "./types";
 import { DEFAULT_LIGHTNING_POLICY } from "../config/policies";
 
