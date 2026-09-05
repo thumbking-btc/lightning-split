@@ -119,7 +119,7 @@ describe("Lightning Split Worker API", () => {
         "https://cache.lightning-split.invalid/price/current",
       ),
       caches.default.delete(
-        "https://cache.lightning-split.invalid/price/premium-reference",
+        "https://cache.lightning-split.invalid/price/upbit-btc-premium-v2",
       ),
     ]);
   });
@@ -144,18 +144,22 @@ describe("Lightning Split Worker API", () => {
               },
         ]),
       ),
-      http.get("https://www.okx.com/api/v5/market/ticker", () =>
-        HttpResponse.json({
-          code: "0",
-          data: [
-            {
-              instType: "SPOT",
-              instId: "BTC-USDT",
-              last: "80000",
-              ts: String(timestamp),
+      http.get(
+        "https://datalab-api.upbit.com/api/v1/indicator/premium/assets",
+        () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              records: [
+                {
+                  code: "CRIX.UPBIT.KRW-BTC",
+                  pair: "BTC/KRW",
+                  disparityRate: 1.63563823,
+                  realDisparityRate: 0.08408681,
+                },
+              ],
             },
-          ],
-        }),
+          }),
       ),
     );
 
@@ -164,6 +168,7 @@ describe("Lightning Split Worker API", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       snapshot: { source: "upbit", priceKrw: "120000000" },
+      premium: { basisPoints: "164" },
     });
   });
 

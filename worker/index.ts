@@ -16,7 +16,7 @@ import { InfrastructureError } from "../src/infrastructure/errors";
 import { checkSettlement } from "../src/lightning/settlement";
 import {
   KimchiPremiumService,
-  UpbitInternationalPremiumAdapter,
+  UpbitDatalabPremiumAdapter,
 } from "../src/pricing/premium";
 import {
   BithumbPriceAdapter,
@@ -159,7 +159,7 @@ async function handlePrice(): Promise<Response> {
   );
   const snapshot = await service.getSnapshot();
   const premium = await new KimchiPremiumService(
-    new UpbitInternationalPremiumAdapter(),
+    new UpbitDatalabPremiumAdapter(),
     new WorkerPremiumReferenceCache(),
   )
     .getInformation(snapshot.priceKrw)

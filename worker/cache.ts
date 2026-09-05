@@ -25,7 +25,7 @@ import {
 
 const INTERNAL_CACHE_ORIGIN = "https://cache.lightning-split.invalid";
 const PRICE_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/current`;
-const PREMIUM_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/premium-reference`;
+const PREMIUM_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/upbit-btc-premium-v2`;
 const USD_PRICE_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/usd/current`;
 const USD_PREMIUM_CACHE_KEY = `${INTERNAL_CACHE_ORIGIN}/price/usd/premium-reference`;
 

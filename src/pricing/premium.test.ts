@@ -1,254 +1,146 @@
 import { describe, expect, it, vi } from "vitest";
-
 import {
   KimchiPremiumService,
+  UpbitDatalabPremiumAdapter,
+  UPBIT_PREMIUM_URL,
   type PremiumReference,
-  type PremiumReferenceAdapter,
   type PremiumReferenceCache,
-  UpbitInternationalPremiumAdapter,
 } from "./premium";
-
-describe("kimchi premium information", () => {
-  it("calculates informational basis points with integer arithmetic", async () => {
-    const now = Date.parse("2030-01-01T00:00:00.000Z");
-    const adapter = new UpbitInternationalPremiumAdapter(
-      (input) => {
-        const url = String(input);
-        return Promise.resolve(
-          url.includes("upbit")
-            ? Response.json([
-                {
-                  market: "KRW-USDT",
-                  trade_price: 1_400,
-                  trade_timestamp: now,
-                },
-              ])
-            : Response.json({
-                code: "0",
-                data: [
-                  {
-                    instType: "SPOT",
-                    instId: "BTC-USDT",
-                    last: "100000.00000000",
-                    ts: String(now),
-                  },
-                ],
-              }),
-        );
+const now = Date.parse("2030-01-01T00:00:00Z");
+const record = {
+  code: "CRIX.UPBIT.KRW-BTC",
+  pair: "BTC/KRW",
+  disparityRate: 1.63563823,
+  realDisparityRate: 0.08408681,
+};
+function adapter(records: unknown[] = [record], code = 0) {
+  const fetcher = vi.fn((input: string | URL) => {
+    expect(String(input)).toBe(UPBIT_PREMIUM_URL);
+    return Promise.resolve(Response.json({ code, data: { records } }));
+  });
+  return {
+    fetcher,
+    source: new UpbitDatalabPremiumAdapter(fetcher, undefined, () => now),
+  };
+}
+describe("Upbit BTC premium", () => {
+  it("selects BTC disparityRate, never realDisparityRate or another asset", async () => {
+    const { source, fetcher } = adapter([
+      {
+        ...record,
+        code: "CRIX.UPBIT.KRW-ETH",
+        pair: "ETH/KRW",
+        disparityRate: 9,
       },
+      record,
+    ]);
+    const service = new KimchiPremiumService(
+      source,
+      undefined,
       undefined,
       () => now,
     );
-    const information = await new KimchiPremiumService(
-      adapter,
-      undefined,
-      undefined,
-      () => now,
-    ).getInformation(142_800_000n);
-    expect(information.referencePriceKrw).toBe(140_000_000n);
-    expect(information.basisPoints).toBe(200n);
+    expect((await service.getInformation(108_910_000n)).basisPoints).toBe(164n);
+    expect((await service.getInformation(120_000_000n)).basisPoints).toBe(164n);
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe(UPBIT_PREMIUM_URL);
   });
-
-  it("reuses the premium reference for 60 seconds independently of the price cache", async () => {
-    let now = Date.parse("2030-01-01T00:00:00.000Z");
-    let fetchCount = 0;
+  it.each([
+    [0, "0"],
+    [-1.63563823, "-164"],
+    [1.005, "101"],
+    [-1.005, "-101"],
+    [50, "5000"],
+    [-50, "-5000"],
+  ])("rounds percent %s to basis points %s", async (rate, expected) => {
+    expect(
+      (
+        await adapter([
+          { ...record, disparityRate: rate },
+        ]).source.fetchReference()
+      ).basisPoints,
+    ).toBe(expected);
+  });
+  it.each([null, "", "NaN", 50.01, -50.01, true, undefined])(
+    "rejects invalid or missing disparityRate %s",
+    async (rate) => {
+      await expect(
+        adapter([{ ...record, disparityRate: rate }]).source.fetchReference(),
+      ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    },
+  );
+  it("rejects missing, duplicate, mismatched BTC records and failed API status", async () => {
+    for (const source of [
+      adapter([]).source,
+      adapter([record, record]).source,
+      adapter([{ ...record, pair: "BTC/USDT" }]).source,
+      adapter([record], 1).source,
+    ]) {
+      await expect(source.fetchReference()).rejects.toMatchObject({
+        code: "INVALID_RESPONSE",
+      });
+    }
+  });
+  it("expires cache after 60 seconds without recomputing the indicator from live BTC prices", async () => {
+    let clock = now;
     let stored: PremiumReference | null = null;
+    const { source, fetcher } = adapter();
     const cache: PremiumReferenceCache = {
-      get: () => Promise.resolve(stored),
-      put: (reference) => {
-        stored = reference;
-        return Promise.resolve();
+      get: async () => stored,
+      put: async (value) => {
+        stored = value;
       },
     };
-    const adapter = new UpbitInternationalPremiumAdapter(
-      (input) => {
-        fetchCount += 1;
-        return Promise.resolve(
-          String(input).includes("upbit")
-            ? Response.json([
-                {
-                  market: "KRW-USDT",
-                  trade_price: 1_400,
-                  trade_timestamp: now,
-                },
-              ])
-            : Response.json({
-                code: "0",
-                data: [
-                  {
-                    instType: "SPOT",
-                    instId: "BTC-USDT",
-                    last: "100000",
-                    ts: String(now),
-                  },
-                ],
-              }),
-        );
-      },
-      undefined,
-      () => now,
-    );
     const service = new KimchiPremiumService(
-      adapter,
+      source,
       cache,
       undefined,
-      () => now,
+      () => clock,
     );
-    await service.getInformation(140_000_000n);
-    now += 59_000;
-    await service.getInformation(140_000_000n);
-    expect(fetchCount).toBe(2);
-    now += 2_000;
-    await service.getInformation(140_000_000n);
-    expect(fetchCount).toBe(4);
+    await service.getInformation(100_000_000n);
+    clock += 59_000;
+    expect((await service.getInformation(110_000_000n)).basisPoints).toBe(164n);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    clock += 1_000;
+    await service.getInformation(110_000_000n);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
-
-  it("uses the single KuCoin fallback when the OKX ticker is unavailable", async () => {
-    const now = Date.parse("2030-01-01T00:00:00.000Z");
-    const requested: string[] = [];
-    const adapter = new UpbitInternationalPremiumAdapter(
-      (input) => {
-        const url = String(input);
-        requested.push(url);
-        if (url.includes("upbit")) {
-          return Promise.resolve(
-            Response.json([
-              {
-                market: "KRW-USDT",
-                trade_price: 1_400,
-                trade_timestamp: now,
-              },
-            ]),
-          );
-        }
-        if (url.includes("okx")) {
-          return Promise.resolve(Response.json({}, { status: 451 }));
-        }
-        return Promise.resolve(
-          Response.json({
-            code: "200000",
-            data: {
-              time: now,
-              price: "100000.00000000",
-            },
-          }),
-        );
+  it("ignores old-format cached references and tolerates cache failures", async () => {
+    const { source, fetcher } = adapter();
+    const caches: PremiumReferenceCache[] = [
+      {
+        get: async () =>
+          ({
+            internationalPriceKrw: "100000000",
+            retrievedAt: new Date(now).toISOString(),
+          }) as unknown as PremiumReference,
+        put: async () => {},
       },
-      undefined,
-      () => now,
-    );
-
-    const reference = await adapter.fetchReference();
-
-    expect(reference.internationalPriceKrw).toBe("140000000");
-    expect(requested.some((url) => url.includes("okx"))).toBe(true);
-    expect(requested.some((url) => url.includes("kucoin"))).toBe(true);
-  });
-
-  it("rejects an international ticker whose timestamp is stale", async () => {
-    const now = Date.parse("2030-01-01T00:02:00.000Z");
-    const stale = now - 61_000;
-    const adapter = new UpbitInternationalPremiumAdapter(
-      (input) => {
-        const url = String(input);
-        if (url.includes("upbit")) {
-          return Promise.resolve(
-            Response.json([
-              {
-                market: "KRW-USDT",
-                trade_price: 1_400,
-                trade_timestamp: now,
-              },
-            ]),
-          );
-        }
-        if (url.includes("okx")) {
-          return Promise.resolve(
-            Response.json({
-              code: "0",
-              data: [
-                {
-                  instType: "SPOT",
-                  instId: "BTC-USDT",
-                  last: "100000",
-                  ts: String(stale),
-                },
-              ],
-            }),
-          );
-        }
-        return Promise.resolve(
-          Response.json({
-            code: "200000",
-            data: { time: stale, price: "100000" },
-          }),
-        );
+      {
+        get: async () => {
+          throw new Error("unavailable");
+        },
+        put: async () => {
+          throw new Error("unavailable");
+        },
       },
-      undefined,
-      () => now,
+    ];
+    for (const cache of caches)
+      expect(
+        (
+          await new KimchiPremiumService(
+            source,
+            cache,
+            undefined,
+            () => now,
+          ).getInformation(100_000_000n)
+        ).basisPoints,
+      ).toBe(164n);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("propagates upstream failure instead of using a different premium", async () => {
+    const source = new UpbitDatalabPremiumAdapter(async () =>
+      Response.json({}, { status: 503 }),
     );
-
-    await expect(adapter.fetchReference()).rejects.toMatchObject({
-      code: "NETWORK_ERROR",
-      retryable: true,
-    });
-  });
-
-  it("treats a premium cache read failure as a miss", async () => {
-    const now = Date.parse("2030-01-01T00:00:00.000Z");
-    const reference: PremiumReference = {
-      internationalPriceKrw: "140000000",
-      observedAt: new Date(now).toISOString(),
-      retrievedAt: new Date(now).toISOString(),
-    };
-    const adapter: PremiumReferenceAdapter = {
-      fetchReference: vi.fn(() => Promise.resolve(reference)),
-    };
-    const cache: PremiumReferenceCache = {
-      get: vi.fn(() => Promise.reject(new Error("cache unavailable"))),
-      put: vi.fn(() => Promise.resolve()),
-    };
-
-    await expect(
-      new KimchiPremiumService(
-        adapter,
-        cache,
-        undefined,
-        () => now,
-      ).getInformation(142_800_000n),
-    ).resolves.toMatchObject({
-      basisPoints: 200n,
-      referencePriceKrw: 140_000_000n,
-    });
-    expect(adapter.fetchReference).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns premium information when the cache write fails", async () => {
-    const now = Date.parse("2030-01-01T00:00:00.000Z");
-    const reference: PremiumReference = {
-      internationalPriceKrw: "140000000",
-      observedAt: new Date(now).toISOString(),
-      retrievedAt: new Date(now).toISOString(),
-    };
-    const adapter: PremiumReferenceAdapter = {
-      fetchReference: vi.fn(() => Promise.resolve(reference)),
-    };
-    const cache: PremiumReferenceCache = {
-      get: vi.fn(() => Promise.resolve(null)),
-      put: vi.fn(() => Promise.reject(new Error("cache unavailable"))),
-    };
-
-    await expect(
-      new KimchiPremiumService(
-        adapter,
-        cache,
-        undefined,
-        () => now,
-      ).getInformation(142_800_000n),
-    ).resolves.toMatchObject({
-      basisPoints: 200n,
-      referencePriceKrw: 140_000_000n,
-    });
-    expect(cache.put).toHaveBeenCalledTimes(1);
+    await expect(source.fetchReference()).rejects.toThrow();
   });
 });
